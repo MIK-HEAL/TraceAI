@@ -60,12 +60,12 @@ func (s *SQLiteStorage) InsertEvent(ctx context.Context, event events.ToolEvent)
 			event_id, schema_version, trace_id, session_id, timestamp,
 			agent_name, agent_version, adapter_name, adapter_version,
 			tool_type, tool_name, function_name, success, duration_ms,
-			input_size, output_size, retry_count, error_type, error_message, metadata
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			input_size, output_size, retry_count, error_type, error_code, error_message, metadata
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, event.EventID, event.SchemaVersion, event.TraceID, event.SessionID, event.Timestamp.UTC().Format(time.RFC3339Nano),
 		event.AgentName, event.AgentVersion, event.AdapterName, event.AdapterVersion,
 		event.ToolType, event.ToolName, event.FunctionName, boolToInt(event.Success), event.DurationMS,
-		event.InputSize, event.OutputSize, event.RetryCount, event.ErrorType, event.ErrorMessage, mustJSON(event.Metadata)); err != nil {
+		event.InputSize, event.OutputSize, event.RetryCount, event.ErrorType, event.ErrorCode, event.ErrorMessage, mustJSON(event.Metadata)); err != nil {
 		return err
 	}
 
@@ -134,7 +134,7 @@ func (s *SQLiteStorage) ListEvents(ctx context.Context, limit int) ([]events.Too
 		SELECT event_id, schema_version, trace_id, session_id, timestamp,
 			agent_name, agent_version, adapter_name, adapter_version,
 			tool_type, tool_name, function_name, success, duration_ms,
-			input_size, output_size, retry_count, error_type, error_message, metadata
+			input_size, output_size, retry_count, error_type, error_code, error_message, metadata
 		FROM events
 		ORDER BY timestamp DESC
 		LIMIT ?
@@ -154,7 +154,7 @@ func (s *SQLiteStorage) ListEvents(ctx context.Context, limit int) ([]events.Too
 			&event.EventID, &event.SchemaVersion, &event.TraceID, &event.SessionID, &timestamp,
 			&event.AgentName, &event.AgentVersion, &event.AdapterName, &event.AdapterVersion,
 			&event.ToolType, &event.ToolName, &event.FunctionName, &success, &event.DurationMS,
-			&event.InputSize, &event.OutputSize, &event.RetryCount, &event.ErrorType, &event.ErrorMessage, &metadata,
+			&event.InputSize, &event.OutputSize, &event.RetryCount, &event.ErrorType, &event.ErrorCode, &event.ErrorMessage, &metadata,
 		); err != nil {
 			return nil, err
 		}
@@ -275,6 +275,7 @@ func (s *SQLiteStorage) migrate(ctx context.Context, db *sql.DB) error {
 			output_size INTEGER NOT NULL,
 			retry_count INTEGER NOT NULL,
 			error_type TEXT NOT NULL DEFAULT '',
+			error_code TEXT NOT NULL DEFAULT '',
 			error_message TEXT NOT NULL DEFAULT '',
 			metadata TEXT NOT NULL DEFAULT '{}'
 		);`,

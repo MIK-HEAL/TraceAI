@@ -22,6 +22,7 @@ func TestMemoryStorageStats(t *testing.T) {
 	event.DurationMS = 100
 	event.InputSize = 12
 	event.OutputSize = 34
+	event.ErrorCode = ""
 	if err := store.InsertEvent(context.Background(), event); err != nil {
 		t.Fatal(err)
 	}

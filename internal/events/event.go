@@ -30,6 +30,7 @@ type ToolEvent struct {
 	OutputSize     int64                  `json:"output_size"`
 	RetryCount     int64                  `json:"retry_count"`
 	ErrorType      string                 `json:"error_type,omitempty"`
+	ErrorCode      string                 `json:"error_code,omitempty"`
 	ErrorMessage   string                 `json:"error_message,omitempty"`
 	Metadata       map[string]interface{} `json:"metadata,omitempty"`
 }
@@ -64,6 +65,17 @@ func (e ToolEvent) Validate() error {
 		return errors.New("function_name is required")
 	}
 	return nil
+}
+
+func (e ToolEvent) Normalize() ToolEvent {
+	clone := e.Clone()
+	if clone.SchemaVersion == "" {
+		clone.SchemaVersion = SchemaVersion
+	}
+	if clone.Metadata == nil {
+		clone.Metadata = map[string]interface{}{}
+	}
+	return clone
 }
 
 func (e ToolEvent) SizeBytes() (int64, error) {

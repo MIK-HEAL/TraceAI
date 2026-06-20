@@ -43,6 +43,7 @@ func (a *OpenAIAdapter) EmitCall(agentName, toolName, functionName string, succe
 	event.OutputSize = outputSize
 	if err != nil {
 		event.ErrorType = "openai_error"
+		event.ErrorCode = "openai_error"
 		event.ErrorMessage = err.Error()
 	}
 	a.events <- event

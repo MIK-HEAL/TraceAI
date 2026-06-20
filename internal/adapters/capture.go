@@ -39,6 +39,7 @@ func (c Capture) Finish(start events.ToolEvent, success bool, inputSize, outputS
 	event.DurationMS = time.Since(start.Timestamp).Milliseconds()
 	if err != nil {
 		event.ErrorType = "adapter_error"
+		event.ErrorCode = "adapter_error"
 		event.ErrorMessage = err.Error()
 	}
 	return event

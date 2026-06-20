@@ -1,0 +1,100 @@
+package collector
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"toollens/internal/events"
+	"toollens/internal/storage"
+)
+
+type retryStorage struct {
+	failures int
+	calls    int
+}
+
+func (s *retryStorage) Init(ctx context.Context) error { return nil }
+func (s *retryStorage) Close() error                    { return nil }
+func (s *retryStorage) ListEvents(ctx context.Context, limit int) ([]events.ToolEvent, error) {
+	return nil, nil
+}
+func (s *retryStorage) TopTools(ctx context.Context, since time.Time, limit int) ([]storage.ToolCount, error) {
+	return nil, nil
+}
+func (s *retryStorage) TopFunctions(ctx context.Context, since time.Time, limit int) ([]storage.FunctionCount, error) {
+	return nil, nil
+}
+func (s *retryStorage) TopAgents(ctx context.Context, since time.Time, limit int) ([]storage.AgentCount, error) {
+	return nil, nil
+}
+func (s *retryStorage) Stats(ctx context.Context, since time.Time) (storage.Stats, error) {
+	return storage.Stats{}, nil
+}
+func (s *retryStorage) InsertEvent(ctx context.Context, event events.ToolEvent) error {
+	s.calls++
+	if s.calls <= s.failures {
+		return errors.New("temporary failure")
+	}
+	return nil
+}
+
+func TestBusRetriesAndSucceeds(t *testing.T) {
+	store := &retryStorage{failures: 2}
+	bus := NewBus(store, 1, 10*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := bus.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	event := events.NewToolEvent()
+	event.AdapterName = "mcp"
+	event.ToolType = "mcp"
+	event.ToolName = "search"
+	event.FunctionName = "tool_call"
+	bus.Publish(event)
+
+	time.Sleep(100 * time.Millisecond)
+	bus.Close()
+
+	if store.calls != 3 {
+		t.Fatalf("expected 3 calls, got %d", store.calls)
+	}
+	if bus.LastError() != nil {
+		t.Fatalf("expected no last error, got %v", bus.LastError())
+	}
+}
+
+func TestBusReportsPermanentFailure(t *testing.T) {
+	store := &retryStorage{failures: 10}
+	bus := NewBus(store, 1, 10*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := bus.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	event := events.NewToolEvent()
+	event.AdapterName = "mcp"
+	event.ToolType = "mcp"
+	event.ToolName = "search"
+	event.FunctionName = "tool_call"
+	bus.Publish(event)
+
+	time.Sleep(100 * time.Millisecond)
+	bus.Close()
+
+	if bus.LastError() == nil {
+		t.Fatal("expected last error to be set")
+	}
+	select {
+	case err := <-bus.Errors():
+		if err == nil {
+			t.Fatal("expected error from channel")
+		}
+	default:
+		t.Fatal("expected error on error channel")
+	}
+}

@@ -12,3 +12,14 @@ func TestNewToolEventValidates(t *testing.T) {
 		t.Fatalf("expected valid event, got error: %v", err)
 	}
 }
+
+func TestNormalizeSetsDefaults(t *testing.T) {
+	e := ToolEvent{}
+	n := e.Normalize()
+	if n.SchemaVersion != SchemaVersion {
+		t.Fatalf("expected schema version %q, got %q", SchemaVersion, n.SchemaVersion)
+	}
+	if n.Metadata == nil {
+		t.Fatal("expected metadata to be initialized")
+	}
+}

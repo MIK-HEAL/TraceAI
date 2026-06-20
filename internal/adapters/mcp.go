@@ -46,6 +46,7 @@ func (a *MCPAdapter) EmitCall(agentName, toolName, functionName string, success 
 	event.OutputSize = outputSize
 	if err != nil {
 		event.ErrorType = "mcp_error"
+		event.ErrorCode = "mcp_error"
 		event.ErrorMessage = err.Error()
 	}
 	a.events <- event
