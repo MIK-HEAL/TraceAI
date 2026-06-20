@@ -1,0 +1,27 @@
+package collector
+
+import (
+	"context"
+	"time"
+
+	"toollens/internal/events"
+	"toollens/internal/storage"
+)
+
+type Collector struct {
+	Bus *Bus
+}
+
+func NewCollector(store storage.Storage) *Collector {
+	return &Collector{
+		Bus: NewBus(store, 32, 500*time.Millisecond),
+	}
+}
+
+func (c *Collector) Start(ctx context.Context) error {
+	return c.Bus.Start(ctx)
+}
+
+func (c *Collector) Publish(event events.ToolEvent) {
+	c.Bus.Publish(event)
+}

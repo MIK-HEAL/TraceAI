@@ -1,0 +1,23 @@
+{
+  "event_id": "evt_7b1a4b2f8b1d9c2f",
+  "schema_version": "v1",
+  "trace_id": "trc_3a2d1e5f6c7b8a9d",
+  "session_id": "ses_0f1e2d3c4b5a6978",
+  "timestamp": "2026-06-20T12:00:00Z",
+  "agent_name": "demo-agent",
+  "agent_version": "0.1.0",
+  "adapter_name": "mcp",
+  "adapter_version": "0.1.0",
+  "tool_type": "mcp",
+  "tool_name": "search",
+  "function_name": "tool_call",
+  "success": true,
+  "duration_ms": 42,
+  "input_size": 128,
+  "output_size": 256,
+  "retry_count": 0,
+  "metadata": {
+    "model": "gpt-4.1-mini",
+    "resource": "docs"
+  }
+}
