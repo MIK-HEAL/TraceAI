@@ -16,6 +16,7 @@ type Storage interface {
 	TopFunctions(ctx context.Context, since time.Time, limit int) ([]FunctionCount, error)
 	TopAgents(ctx context.Context, since time.Time, limit int) ([]AgentCount, error)
 	Stats(ctx context.Context, since time.Time) (Stats, error)
+	DailyStats(ctx context.Context, since time.Time) ([]DailyStat, error)
 }
 
 type ToolCount struct {
@@ -48,4 +49,13 @@ type Stats struct {
 	AvgLatency  float64
 	InputSize   int64
 	OutputSize  int64
+}
+
+type DailyStat struct {
+	StatDay         string
+	Calls           int64
+	Success         int64
+	TotalDurationMS int64
+	InputSize       int64
+	OutputSize      int64
 }

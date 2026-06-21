@@ -30,3 +30,7 @@ func (e *Engine) TopAgents(ctx context.Context, since time.Time, limit int) ([]s
 func (e *Engine) Stats(ctx context.Context, since time.Time) (storage.Stats, error) {
 	return e.Store.Stats(ctx, since)
 }
+
+func (e *Engine) DailyStats(ctx context.Context, since time.Time) ([]storage.DailyStat, error) {
+	return e.Store.DailyStats(ctx, since)
+}

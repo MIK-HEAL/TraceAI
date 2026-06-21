@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,6 +57,8 @@ func run(argv []string, out io.Writer) error {
 		return runTopAgents(engine, args[1:], out)
 	case "stats":
 		return runStats(engine, args[1:], out)
+	case "export":
+		return runExport(engine, args[1:], out)
 	case "seed-demo":
 		if err := seedDemoData(store); err != nil {
 			return err
@@ -97,8 +103,7 @@ func runTopTools(engine *analytics.Engine, args []string, out io.Writer) error {
 		return err
 	}
 	for _, row := range rows {
-		_, err := fmt.Fprintf(out, "%s\tcalls=%d\tsuccess=%d\n", row.ToolName, row.Calls, row.Success)
-		if err != nil {
+		if _, err := fmt.Fprintf(out, "%s\tcalls=%d\tsuccess=%d\n", row.ToolName, row.Calls, row.Success); err != nil {
 			return err
 		}
 	}
@@ -114,8 +119,7 @@ func runTopFunctions(engine *analytics.Engine, args []string, out io.Writer) err
 		return err
 	}
 	for _, row := range rows {
-		_, err := fmt.Fprintf(out, "%s\tcalls=%d\tsuccess=%d\n", row.FunctionName, row.Calls, row.Success)
-		if err != nil {
+		if _, err := fmt.Fprintf(out, "%s\tcalls=%d\tsuccess=%d\n", row.FunctionName, row.Calls, row.Success); err != nil {
 			return err
 		}
 	}
@@ -131,8 +135,7 @@ func runTopAgents(engine *analytics.Engine, args []string, out io.Writer) error 
 		return err
 	}
 	for _, row := range rows {
-		_, err := fmt.Fprintf(out, "%s\tcalls=%d\tsuccess=%d\n", row.AgentName, row.Calls, row.Success)
-		if err != nil {
+		if _, err := fmt.Fprintf(out, "%s\tcalls=%d\tsuccess=%d\n", row.AgentName, row.Calls, row.Success); err != nil {
 			return err
 		}
 	}
@@ -150,6 +153,232 @@ func runStats(engine *analytics.Engine, args []string, out io.Writer) error {
 	return err
 }
 
+func runExport(engine *analytics.Engine, args []string, out io.Writer) error {
+	if len(args) < 1 {
+		return errors.New("export target required")
+	}
+
+	target := args[0]
+	fs := flag.NewFlagSet("export", flag.ExitOnError)
+	format := fs.String("format", "csv", "export format: csv or json")
+	outputPath := fs.String("output", "", "write output to file")
+	_ = fs.Parse(args[1:])
+
+	writer, closeFn, err := openOutput(out, *outputPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = closeFn()
+	}()
+
+	switch target {
+	case "top-tools":
+		rows, err := engine.TopTools(context.Background(), time.Time{}, 0)
+		if err != nil {
+			return err
+		}
+		return writeTopToolsExport(writer, *format, rows)
+	case "top-functions":
+		rows, err := engine.TopFunctions(context.Background(), time.Time{}, 0)
+		if err != nil {
+			return err
+		}
+		return writeTopFunctionsExport(writer, *format, rows)
+	case "top-agents":
+		rows, err := engine.TopAgents(context.Background(), time.Time{}, 0)
+		if err != nil {
+			return err
+		}
+		return writeTopAgentsExport(writer, *format, rows)
+	case "stats":
+		stats, err := engine.Stats(context.Background(), time.Time{})
+		if err != nil {
+			return err
+		}
+		return writeStatsExport(writer, *format, stats)
+	case "daily-stats":
+		rows, err := engine.DailyStats(context.Background(), time.Time{})
+		if err != nil {
+			return err
+		}
+		return writeDailyStatsExport(writer, *format, rows)
+	default:
+		return fmt.Errorf("unknown export target %q", target)
+	}
+}
+
+func writeTopToolsExport(w io.Writer, format string, rows []storage.ToolCount) error {
+	switch format {
+	case "json":
+		payload := make([]exportToolRow, 0, len(rows))
+		for _, row := range rows {
+			payload = append(payload, exportToolRow{
+				ToolName: row.ToolName,
+				Calls:    row.Calls,
+				Success:  row.Success,
+			})
+		}
+		return writeJSON(w, payload)
+	case "csv":
+		records := make([][]string, 0, len(rows))
+		for _, row := range rows {
+			records = append(records, []string{
+				row.ToolName,
+				strconv.FormatInt(row.Calls, 10),
+				strconv.FormatInt(row.Success, 10),
+			})
+		}
+		return writeCSV(w, []string{"tool_name", "calls", "success"}, records)
+	default:
+		return fmt.Errorf("unsupported export format %q", format)
+	}
+}
+
+func writeTopFunctionsExport(w io.Writer, format string, rows []storage.FunctionCount) error {
+	switch format {
+	case "json":
+		payload := make([]exportFunctionRow, 0, len(rows))
+		for _, row := range rows {
+			payload = append(payload, exportFunctionRow{
+				FunctionName: row.FunctionName,
+				Calls:        row.Calls,
+				Success:      row.Success,
+			})
+		}
+		return writeJSON(w, payload)
+	case "csv":
+		records := make([][]string, 0, len(rows))
+		for _, row := range rows {
+			records = append(records, []string{
+				row.FunctionName,
+				strconv.FormatInt(row.Calls, 10),
+				strconv.FormatInt(row.Success, 10),
+			})
+		}
+		return writeCSV(w, []string{"function_name", "calls", "success"}, records)
+	default:
+		return fmt.Errorf("unsupported export format %q", format)
+	}
+}
+
+func writeTopAgentsExport(w io.Writer, format string, rows []storage.AgentCount) error {
+	switch format {
+	case "json":
+		payload := make([]exportAgentRow, 0, len(rows))
+		for _, row := range rows {
+			payload = append(payload, exportAgentRow{
+				AgentName: row.AgentName,
+				Calls:     row.Calls,
+				Success:   row.Success,
+			})
+		}
+		return writeJSON(w, payload)
+	case "csv":
+		records := make([][]string, 0, len(rows))
+		for _, row := range rows {
+			records = append(records, []string{
+				row.AgentName,
+				strconv.FormatInt(row.Calls, 10),
+				strconv.FormatInt(row.Success, 10),
+			})
+		}
+		return writeCSV(w, []string{"agent_name", "calls", "success"}, records)
+	default:
+		return fmt.Errorf("unsupported export format %q", format)
+	}
+}
+
+func writeStatsExport(w io.Writer, format string, stats storage.Stats) error {
+	switch format {
+	case "json":
+		return writeJSON(w, exportStatsRow{
+			Calls:        stats.Calls,
+			SuccessRate:  stats.SuccessRate,
+			AvgLatencyMS: stats.AvgLatency,
+			InputSize:    stats.InputSize,
+			OutputSize:   stats.OutputSize,
+		})
+	case "csv":
+		return writeCSV(w, []string{"calls", "success_rate", "avg_latency_ms", "input_size", "output_size"}, [][]string{{
+			strconv.FormatInt(stats.Calls, 10),
+			strconv.FormatFloat(stats.SuccessRate, 'f', 2, 64),
+			strconv.FormatFloat(stats.AvgLatency, 'f', 2, 64),
+			strconv.FormatInt(stats.InputSize, 10),
+			strconv.FormatInt(stats.OutputSize, 10),
+		}})
+	default:
+		return fmt.Errorf("unsupported export format %q", format)
+	}
+}
+
+func writeDailyStatsExport(w io.Writer, format string, rows []storage.DailyStat) error {
+	switch format {
+	case "json":
+		payload := make([]exportDailyStatRow, 0, len(rows))
+		for _, row := range rows {
+			payload = append(payload, exportDailyStatRow{
+				StatDay:         row.StatDay,
+				Calls:           row.Calls,
+				Success:         row.Success,
+				TotalDurationMS: row.TotalDurationMS,
+				InputSize:       row.InputSize,
+				OutputSize:      row.OutputSize,
+			})
+		}
+		return writeJSON(w, payload)
+	case "csv":
+		records := make([][]string, 0, len(rows))
+		for _, row := range rows {
+			records = append(records, []string{
+				row.StatDay,
+				strconv.FormatInt(row.Calls, 10),
+				strconv.FormatInt(row.Success, 10),
+				strconv.FormatInt(row.TotalDurationMS, 10),
+				strconv.FormatInt(row.InputSize, 10),
+				strconv.FormatInt(row.OutputSize, 10),
+			})
+		}
+		return writeCSV(w, []string{"stat_day", "calls", "success", "total_duration_ms", "input_size", "output_size"}, records)
+	default:
+		return fmt.Errorf("unsupported export format %q", format)
+	}
+}
+
+func writeCSV(w io.Writer, headers []string, records [][]string) error {
+	cw := csv.NewWriter(w)
+	if err := cw.Write(headers); err != nil {
+		return err
+	}
+	for _, record := range records {
+		if err := cw.Write(record); err != nil {
+			return err
+		}
+	}
+	cw.Flush()
+	return cw.Error()
+}
+
+func writeJSON(w io.Writer, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(w, string(data))
+	return err
+}
+
+func openOutput(defaultWriter io.Writer, outputPath string) (io.Writer, func() error, error) {
+	if outputPath == "" {
+		return defaultWriter, func() error { return nil }, nil
+	}
+	file, err := os.Create(outputPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	return file, file.Close, nil
+}
+
 func printUsage(out io.Writer) {
 	fmt.Fprintln(out, strings.TrimSpace(`
 ToolLens
@@ -160,5 +389,41 @@ Usage:
   toollens [--store sqlite|memory] [--db path] top-agents
   toollens [--store sqlite|memory] [--db path] stats
   toollens [--store sqlite|memory] [--db path] seed-demo
+  toollens [--store sqlite|memory] [--db path] export <top-tools|top-functions|top-agents|stats|daily-stats> [--format csv|json] [--output path]
 `))
+}
+
+type exportToolRow struct {
+	ToolName string `json:"tool_name"`
+	Calls    int64  `json:"calls"`
+	Success  int64  `json:"success"`
+}
+
+type exportFunctionRow struct {
+	FunctionName string `json:"function_name"`
+	Calls        int64  `json:"calls"`
+	Success      int64  `json:"success"`
+}
+
+type exportAgentRow struct {
+	AgentName string `json:"agent_name"`
+	Calls     int64  `json:"calls"`
+	Success   int64  `json:"success"`
+}
+
+type exportStatsRow struct {
+	Calls        int64   `json:"calls"`
+	SuccessRate  float64 `json:"success_rate"`
+	AvgLatencyMS float64 `json:"avg_latency_ms"`
+	InputSize    int64   `json:"input_size"`
+	OutputSize   int64   `json:"output_size"`
+}
+
+type exportDailyStatRow struct {
+	StatDay         string `json:"stat_day"`
+	Calls           int64  `json:"calls"`
+	Success         int64  `json:"success"`
+	TotalDurationMS int64  `json:"total_duration_ms"`
+	InputSize       int64  `json:"input_size"`
+	OutputSize      int64  `json:"output_size"`
 }

@@ -16,7 +16,7 @@ type retryStorage struct {
 }
 
 func (s *retryStorage) Init(ctx context.Context) error { return nil }
-func (s *retryStorage) Close() error                    { return nil }
+func (s *retryStorage) Close() error                   { return nil }
 func (s *retryStorage) ListEvents(ctx context.Context, limit int) ([]events.ToolEvent, error) {
 	return nil, nil
 }
@@ -31,6 +31,9 @@ func (s *retryStorage) TopAgents(ctx context.Context, since time.Time, limit int
 }
 func (s *retryStorage) Stats(ctx context.Context, since time.Time) (storage.Stats, error) {
 	return storage.Stats{}, nil
+}
+func (s *retryStorage) DailyStats(ctx context.Context, since time.Time) ([]storage.DailyStat, error) {
+	return nil, nil
 }
 func (s *retryStorage) InsertEvent(ctx context.Context, event events.ToolEvent) error {
 	s.calls++

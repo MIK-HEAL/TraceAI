@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -71,5 +73,56 @@ func TestSeedDemoCommandWritesData(t *testing.T) {
 	}
 	if len(events) == 0 {
 		t.Fatal("expected events to be written by seed-demo command")
+	}
+}
+
+func TestExportTopToolsCSV(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "export.db")
+	csvPath := filepath.Join(tmpDir, "top-tools.csv")
+	var stdout bytes.Buffer
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "seed-demo"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "export", "top-tools", "--format", "csv", "--output", csvPath}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(csvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "tool_name,calls,success") {
+		t.Fatalf("unexpected csv export: %s", string(data))
+	}
+	if strings.Count(strings.TrimSpace(content), "\n") < 2 {
+		t.Fatalf("expected csv data rows, got: %s", content)
+	}
+	if !strings.Contains(content, "search") {
+		t.Fatalf("expected exported csv to include data rows, got: %s", content)
+	}
+}
+
+func TestExportStatsJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "export-json.db")
+	jsonPath := filepath.Join(tmpDir, "stats.json")
+	var stdout bytes.Buffer
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "seed-demo"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "export", "stats", "--format", "json", "--output", jsonPath}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "\"calls\"") {
+		t.Fatalf("unexpected json export: %s", string(data))
+	}
+	if !strings.Contains(content, strconv.Itoa(5)) {
+		t.Fatalf("expected json export to contain seeded rows, got: %s", content)
 	}
 }

@@ -228,15 +228,43 @@ func (s *SQLiteStorage) Stats(ctx context.Context, since time.Time) (Stats, erro
 	return stats, nil
 }
 
+func (s *SQLiteStorage) DailyStats(ctx context.Context, since time.Time) ([]DailyStat, error) {
+	where, args := sinceDayClause(since)
+	query := fmt.Sprintf(`
+		SELECT stat_day, call_count, success_count, total_duration_ms, input_size, output_size
+		FROM daily_stats %s
+		ORDER BY stat_day ASC
+	`, where)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []DailyStat
+	for rows.Next() {
+		var item DailyStat
+		if err := rows.Scan(&item.StatDay, &item.Calls, &item.Success, &item.TotalDurationMS, &item.InputSize, &item.OutputSize); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func (s *SQLiteStorage) topCounts(ctx context.Context, since time.Time, limit int, baseQuery, column string) ([]ToolCount, error) {
 	where, args := sinceClause(since)
+	limitClause := ""
+	if limit > 0 {
+		limitClause = "LIMIT ?"
+		args = append(args, limit)
+	}
 	query := fmt.Sprintf(`
 		%s %s
 		GROUP BY %s
 		ORDER BY calls DESC, name ASC
-		LIMIT ?
-	`, baseQuery, where, column)
-	args = append(args, limit)
+		%s
+	`, baseQuery, where, column, limitClause)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -332,6 +360,13 @@ func sinceClause(since time.Time) (string, []any) {
 		return "", nil
 	}
 	return "WHERE timestamp >= ?", []any{since.UTC().Format(time.RFC3339Nano)}
+}
+
+func sinceDayClause(since time.Time) (string, []any) {
+	if since.IsZero() {
+		return "", nil
+	}
+	return "WHERE stat_day >= ?", []any{since.UTC().Format("2006-01-02")}
 }
 
 func boolToInt(v bool) int {

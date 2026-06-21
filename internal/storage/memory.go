@@ -117,6 +117,41 @@ func (s *MemoryStorage) Stats(ctx context.Context, since time.Time) (Stats, erro
 	return stats, nil
 }
 
+func (s *MemoryStorage) DailyStats(ctx context.Context, since time.Time) ([]DailyStat, error) {
+	_ = ctx
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	counts := map[string]*DailyStat{}
+	for _, event := range s.events {
+		if !since.IsZero() && event.Timestamp.Before(since) {
+			continue
+		}
+		day := event.Timestamp.UTC().Format("2006-01-02")
+		item, ok := counts[day]
+		if !ok {
+			item = &DailyStat{StatDay: day}
+			counts[day] = item
+		}
+		item.Calls++
+		if event.Success {
+			item.Success++
+		}
+		item.TotalDurationMS += event.DurationMS
+		item.InputSize += event.InputSize
+		item.OutputSize += event.OutputSize
+	}
+
+	items := make([]DailyStat, 0, len(counts))
+	for _, item := range counts {
+		items = append(items, *item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].StatDay < items[j].StatDay
+	})
+	return items, nil
+}
+
 func (s *MemoryStorage) topCounts(ctx context.Context, since time.Time, limit int, keyFn func(events.ToolEvent) string) ([]ToolCount, error) {
 	_ = ctx
 	s.mu.RLock()
