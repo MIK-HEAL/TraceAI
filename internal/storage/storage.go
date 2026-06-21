@@ -15,6 +15,7 @@ type Storage interface {
 	TopTools(ctx context.Context, since time.Time, limit int) ([]ToolCount, error)
 	TopFunctions(ctx context.Context, since time.Time, limit int) ([]FunctionCount, error)
 	TopAgents(ctx context.Context, since time.Time, limit int) ([]AgentCount, error)
+	ToolFailureRates(ctx context.Context, since time.Time, limit int) ([]ToolFailureRate, error)
 	Stats(ctx context.Context, since time.Time) (Stats, error)
 	DailyStats(ctx context.Context, since time.Time) ([]DailyStat, error)
 }
@@ -23,6 +24,13 @@ type ToolCount struct {
 	ToolName string
 	Calls    int64
 	Success  int64
+}
+
+type ToolFailureRate struct {
+	ToolName    string
+	Calls       int64
+	Failures    int64
+	FailureRate float64
 }
 
 type FunctionCount struct {

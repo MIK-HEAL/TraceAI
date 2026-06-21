@@ -27,6 +27,10 @@ func (e *Engine) TopAgents(ctx context.Context, since time.Time, limit int) ([]s
 	return e.Store.TopAgents(ctx, since, limit)
 }
 
+func (e *Engine) ToolFailureRates(ctx context.Context, since time.Time, limit int) ([]storage.ToolFailureRate, error) {
+	return e.Store.ToolFailureRates(ctx, since, limit)
+}
+
 func (e *Engine) Stats(ctx context.Context, since time.Time) (storage.Stats, error) {
 	return e.Store.Stats(ctx, since)
 }

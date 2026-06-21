@@ -205,6 +205,40 @@ func (s *SQLiteStorage) TopAgents(ctx context.Context, since time.Time, limit in
 	return out, nil
 }
 
+func (s *SQLiteStorage) ToolFailureRates(ctx context.Context, since time.Time, limit int) ([]ToolFailureRate, error) {
+	where, args := sinceClause(since)
+	limitClause := ""
+	if limit > 0 {
+		limitClause = "LIMIT ?"
+		args = append(args, limit)
+	}
+	query := fmt.Sprintf(`
+		SELECT tool_name,
+			COUNT(*) AS calls,
+			COUNT(*) - COALESCE(SUM(success), 0) AS failures,
+			CASE WHEN COUNT(*) = 0 THEN 0 ELSE CAST(COUNT(*) - COALESCE(SUM(success), 0) AS REAL) / COUNT(*) END AS failure_rate
+		FROM events %s
+		GROUP BY tool_name
+		ORDER BY failure_rate DESC, calls DESC, tool_name ASC
+		%s
+	`, where, limitClause)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ToolFailureRate
+	for rows.Next() {
+		var item ToolFailureRate
+		if err := rows.Scan(&item.ToolName, &item.Calls, &item.Failures, &item.FailureRate); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func (s *SQLiteStorage) Stats(ctx context.Context, since time.Time) (Stats, error) {
 	where, args := sinceClause(since)
 	query := fmt.Sprintf(`

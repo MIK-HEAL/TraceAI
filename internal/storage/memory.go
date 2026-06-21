@@ -92,6 +92,63 @@ func (s *MemoryStorage) TopAgents(ctx context.Context, since time.Time, limit in
 	return out, nil
 }
 
+func (s *MemoryStorage) ToolFailureRates(ctx context.Context, since time.Time, limit int) ([]ToolFailureRate, error) {
+	_ = ctx
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	type counter struct {
+		calls    int64
+		failures int64
+	}
+
+	counts := map[string]*counter{}
+	for _, event := range s.events {
+		if !since.IsZero() && event.Timestamp.Before(since) {
+			continue
+		}
+		if event.ToolName == "" {
+			continue
+		}
+		item, ok := counts[event.ToolName]
+		if !ok {
+			item = &counter{}
+			counts[event.ToolName] = item
+		}
+		item.calls++
+		if !event.Success {
+			item.failures++
+		}
+	}
+
+	items := make([]ToolFailureRate, 0, len(counts))
+	for toolName, item := range counts {
+		failureRate := 0.0
+		if item.calls > 0 {
+			failureRate = float64(item.failures) / float64(item.calls)
+		}
+		items = append(items, ToolFailureRate{
+			ToolName:    toolName,
+			Calls:       item.calls,
+			Failures:    item.failures,
+			FailureRate: failureRate,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].FailureRate == items[j].FailureRate {
+			if items[i].Calls == items[j].Calls {
+				return items[i].ToolName < items[j].ToolName
+			}
+			return items[i].Calls > items[j].Calls
+		}
+		return items[i].FailureRate > items[j].FailureRate
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
 func (s *MemoryStorage) Stats(ctx context.Context, since time.Time) (Stats, error) {
 	_ = ctx
 	s.mu.RLock()

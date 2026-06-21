@@ -29,6 +29,9 @@ func (s *retryStorage) TopFunctions(ctx context.Context, since time.Time, limit 
 func (s *retryStorage) TopAgents(ctx context.Context, since time.Time, limit int) ([]storage.AgentCount, error) {
 	return nil, nil
 }
+func (s *retryStorage) ToolFailureRates(ctx context.Context, since time.Time, limit int) ([]storage.ToolFailureRate, error) {
+	return nil, nil
+}
 func (s *retryStorage) Stats(ctx context.Context, since time.Time) (storage.Stats, error) {
 	return storage.Stats{}, nil
 }

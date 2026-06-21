@@ -267,6 +267,9 @@ go build -o bin/toollens ./cmd/toollens
 # 查看总体统计
 ./bin/toollens --store sqlite --db trace.db stats
 
+# 输出基础报表
+./bin/toollens --store sqlite --db trace.db report --limit 5
+
 # 显式写入演示数据
 ./bin/toollens --store sqlite --db trace.db seed-demo
 
@@ -335,7 +338,7 @@ top, _ := tsdk.TopTools(ctx, time.Time{}, 10)
 - [x] 增加端到端烟雾测试
 - [x] 补齐安装与使用文档
 - [x] 增加真实接入示例
-- [ ] 增加基础报表输出
+- [x] 增加基础报表输出
 - [ ] 完成版本与发布检查
 
 ---

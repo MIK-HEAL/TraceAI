@@ -126,3 +126,30 @@ func TestExportStatsJSON(t *testing.T) {
 		t.Fatalf("expected json export to contain seeded rows, got: %s", content)
 	}
 }
+
+func TestReportCommandOutputsSections(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "report.db")
+	var stdout bytes.Buffer
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "seed-demo"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "report", "--limit", "3"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	content := stdout.String()
+	if !strings.Contains(content, "Tool Heatmap") {
+		t.Fatalf("expected tool heatmap section, got: %s", content)
+	}
+	if !strings.Contains(content, "Error Rate Ranking") {
+		t.Fatalf("expected error rate section, got: %s", content)
+	}
+	if !strings.Contains(content, "Agent Usage") {
+		t.Fatalf("expected agent usage section, got: %s", content)
+	}
+	if !strings.Contains(content, "search") {
+		t.Fatalf("expected report data rows, got: %s", content)
+	}
+}

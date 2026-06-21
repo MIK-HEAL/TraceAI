@@ -57,6 +57,8 @@ func run(argv []string, out io.Writer) error {
 		return runTopAgents(engine, args[1:], out)
 	case "stats":
 		return runStats(engine, args[1:], out)
+	case "report":
+		return runReport(engine, args[1:], out)
 	case "export":
 		return runExport(engine, args[1:], out)
 	case "seed-demo":
@@ -151,6 +153,51 @@ func runStats(engine *analytics.Engine, args []string, out io.Writer) error {
 	_, err = fmt.Fprintf(out, "calls=%d\nsuccess_rate=%.2f\navg_latency_ms=%.2f\ninput_size=%d\noutput_size=%d\n",
 		stats.Calls, stats.SuccessRate, stats.AvgLatency, stats.InputSize, stats.OutputSize)
 	return err
+}
+
+func runReport(engine *analytics.Engine, args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("report", flag.ExitOnError)
+	limit := fs.Int("limit", 5, "result limit")
+	_ = fs.Parse(args)
+
+	tools, err := engine.TopTools(context.Background(), time.Time{}, *limit)
+	if err != nil {
+		return err
+	}
+	failures, err := engine.ToolFailureRates(context.Background(), time.Time{}, *limit)
+	if err != nil {
+		return err
+	}
+	agents, err := engine.TopAgents(context.Background(), time.Time{}, *limit)
+	if err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintln(out, "Tool Heatmap"); err != nil {
+		return err
+	}
+	for _, row := range tools {
+		if _, err := fmt.Fprintf(out, "%-18s calls=%-4d success=%-4d\n", row.ToolName, row.Calls, row.Success); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintln(out, "\nError Rate Ranking"); err != nil {
+		return err
+	}
+	for _, row := range failures {
+		if _, err := fmt.Fprintf(out, "%-18s calls=%-4d failures=%-4d rate=%.1f%%\n", row.ToolName, row.Calls, row.Failures, row.FailureRate*100); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintln(out, "\nAgent Usage"); err != nil {
+		return err
+	}
+	for _, row := range agents {
+		if _, err := fmt.Fprintf(out, "%-18s calls=%-4d success=%-4d\n", row.AgentName, row.Calls, row.Success); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runExport(engine *analytics.Engine, args []string, out io.Writer) error {
@@ -388,6 +435,7 @@ Usage:
   toollens [--store sqlite|memory] [--db path] top-functions
   toollens [--store sqlite|memory] [--db path] top-agents
   toollens [--store sqlite|memory] [--db path] stats
+  toollens [--store sqlite|memory] [--db path] report [--limit n]
   toollens [--store sqlite|memory] [--db path] seed-demo
   toollens [--store sqlite|memory] [--db path] export <top-tools|top-functions|top-agents|stats|daily-stats> [--format csv|json] [--output path]
 `))
