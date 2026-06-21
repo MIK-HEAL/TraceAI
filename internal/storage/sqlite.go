@@ -45,6 +45,13 @@ func (s *SQLiteStorage) Close() error {
 	return s.db.Close()
 }
 
+func (s *SQLiteStorage) Ping(ctx context.Context) error {
+	if s.db == nil {
+		return fmt.Errorf("storage not initialized")
+	}
+	return s.db.PingContext(ctx)
+}
+
 func (s *SQLiteStorage) InsertEvent(ctx context.Context, event events.ToolEvent) error {
 	if err := event.Validate(); err != nil {
 		return err

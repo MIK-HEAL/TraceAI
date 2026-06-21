@@ -14,8 +14,11 @@ import (
 	"time"
 
 	"toollens/internal/analytics"
+	"toollens/internal/config"
 	"toollens/internal/events"
 	"toollens/internal/storage"
+	"toollens/pkg/sdk"
+	"toollens/pkg/state"
 )
 
 func main() {
@@ -27,9 +30,11 @@ func main() {
 
 func run(argv []string, out io.Writer) error {
 	fs := flag.NewFlagSet("toollens", flag.ExitOnError)
-	backend := fs.String("store", "sqlite", "storage backend: sqlite or memory")
-	dbPath := fs.String("db", "toollens.db", "sqlite database path")
+	cfg := config.Load(fs)
 	_ = fs.Parse(argv)
+	if err := config.ApplyFile(fs, cfg); err != nil {
+		return wrapError("load config", err)
+	}
 
 	args := fs.Args()
 	if len(args) < 1 {
@@ -37,12 +42,12 @@ func run(argv []string, out io.Writer) error {
 		return nil
 	}
 
-	store, err := storage.New(storage.Config{Backend: *backend, Path: *dbPath})
+	store, err := storage.New(storage.Config{Backend: cfg.Store, Path: cfg.DB})
 	if err != nil {
-		return err
+		return wrapError("create storage", err)
 	}
 	if err := store.Init(context.Background()); err != nil {
-		return err
+		return wrapError("init storage", err)
 	}
 	defer store.Close()
 
@@ -59,6 +64,12 @@ func run(argv []string, out io.Writer) error {
 		return runStats(engine, args[1:], out)
 	case "report":
 		return runReport(engine, args[1:], out)
+	case "status":
+		return runStatus(sdk.New(store), out)
+	case "health":
+		return runHealth(sdk.New(store), out)
+	case "metrics":
+		return runMetrics(sdk.New(store), out)
 	case "export":
 		return runExport(engine, args[1:], out)
 	case "seed-demo":
@@ -148,11 +159,48 @@ func runStats(engine *analytics.Engine, args []string, out io.Writer) error {
 	_ = args
 	stats, err := engine.Stats(context.Background(), time.Time{})
 	if err != nil {
-		return err
+		return wrapError("query stats", err)
 	}
 	_, err = fmt.Fprintf(out, "calls=%d\nsuccess_rate=%.2f\navg_latency_ms=%.2f\ninput_size=%d\noutput_size=%d\n",
 		stats.Calls, stats.SuccessRate, stats.AvgLatency, stats.InputSize, stats.OutputSize)
 	return err
+}
+
+func runStatus(client *sdk.SDK, out io.Writer) error {
+	status, err := client.Status(context.Background())
+	if err != nil {
+		_ = writeStatus(out, status)
+		return wrapError("collect status", err)
+	}
+	return writeStatus(out, status)
+}
+
+func runHealth(client *sdk.SDK, out io.Writer) error {
+	status, err := client.Status(context.Background())
+	if err != nil {
+		return wrapError("health check", err)
+	}
+	if !status.StorageOK || status.LastError != "" {
+		if status.LastError != "" {
+			return wrapError("health check", errors.New(status.LastError))
+		}
+		return errors.New("storage check failed")
+	}
+	_, err = fmt.Fprintln(out, "ok")
+	return err
+}
+
+func runMetrics(client *sdk.SDK, out io.Writer) error {
+	metrics, err := client.Metrics(context.Background())
+	if err != nil {
+		return wrapError("collect metrics", err)
+	}
+	for _, metric := range metrics {
+		if _, err := fmt.Fprintf(out, "%s=%v\n", metric.Name, metric.Value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runReport(engine *analytics.Engine, args []string, out io.Writer) error {
@@ -426,6 +474,22 @@ func openOutput(defaultWriter io.Writer, outputPath string) (io.Writer, func() e
 	return file, file.Close, nil
 }
 
+func writeStatus(out io.Writer, status state.Status) error {
+	payload, err := json.MarshalIndent(status, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(out, string(payload))
+	return err
+}
+
+func wrapError(action string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", action, err)
+}
+
 func printUsage(out io.Writer) {
 	fmt.Fprintln(out, strings.TrimSpace(`
 ToolLens
@@ -436,6 +500,9 @@ Usage:
   toollens [--store sqlite|memory] [--db path] top-agents
   toollens [--store sqlite|memory] [--db path] stats
   toollens [--store sqlite|memory] [--db path] report [--limit n]
+  toollens [--store sqlite|memory] [--db path] status
+  toollens [--store sqlite|memory] [--db path] health
+  toollens [--store sqlite|memory] [--db path] metrics
   toollens [--store sqlite|memory] [--db path] seed-demo
   toollens [--store sqlite|memory] [--db path] export <top-tools|top-functions|top-agents|stats|daily-stats> [--format csv|json] [--output path]
 `))

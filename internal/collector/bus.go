@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -19,6 +20,8 @@ type Bus struct {
 	errs       chan error
 	wg         sync.WaitGroup
 	once       sync.Once
+	publishMu  sync.Mutex
+	closed     bool
 	mu         sync.Mutex
 	lastErr    error
 	maxRetries int
@@ -85,15 +88,35 @@ func (b *Bus) Start(ctx context.Context) error {
 }
 
 func (b *Bus) Publish(event events.ToolEvent) {
+	b.publishMu.Lock()
+	defer b.publishMu.Unlock()
+	if b.closed {
+		b.reportError(errors.New("bus is closed"))
+		return
+	}
 	select {
 	case b.input <- event:
 	default:
-		b.input <- event
+		select {
+		case b.input <- event:
+		default:
+			b.reportError(errors.New("event dropped: bus queue full"))
+		}
 	}
 }
 
 func (b *Bus) Errors() <-chan error {
 	return b.errs
+}
+
+func (b *Bus) Input() <-chan events.ToolEvent {
+	return b.input
+}
+
+func (b *Bus) IsClosed() bool {
+	b.publishMu.Lock()
+	defer b.publishMu.Unlock()
+	return b.closed
 }
 
 func (b *Bus) LastError() error {
@@ -103,8 +126,13 @@ func (b *Bus) LastError() error {
 }
 
 func (b *Bus) Close() {
+	b.publishMu.Lock()
+	if !b.closed {
+		b.closed = true
+		close(b.input)
+	}
+	b.publishMu.Unlock()
 	b.once.Do(func() { close(b.done) })
-	close(b.input)
 	b.wg.Wait()
 }
 

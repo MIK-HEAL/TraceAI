@@ -36,6 +36,16 @@ func (s *MemoryStorage) Close() error {
 	return nil
 }
 
+func (s *MemoryStorage) Ping(ctx context.Context) error {
+	_ = ctx
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return errors.New("storage closed")
+	}
+	return nil
+}
+
 func (s *MemoryStorage) InsertEvent(ctx context.Context, event events.ToolEvent) error {
 	_ = ctx
 	if err := event.Validate(); err != nil {

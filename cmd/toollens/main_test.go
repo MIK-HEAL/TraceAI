@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -73,6 +74,41 @@ func TestSeedDemoCommandWritesData(t *testing.T) {
 	}
 	if len(events) == 0 {
 		t.Fatal("expected events to be written by seed-demo command")
+	}
+}
+
+func TestConfigFileCanDriveSeedDemo(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "config-demo.db")
+	configPath := filepath.Join(tmpDir, "traceai.json")
+	payload, err := json.Marshal(struct {
+		Store string `json:"store"`
+		DB    string `json:"db"`
+	}{Store: "sqlite", DB: dbPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, payload, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	if err := run([]string{"--config", configPath, "seed-demo"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+
+	store := storage.NewSQLiteStorage(dbPath)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	events, err := store.ListEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected events to be written by config file")
 	}
 }
 
@@ -151,5 +187,38 @@ func TestReportCommandOutputsSections(t *testing.T) {
 	}
 	if !strings.Contains(content, "search") {
 		t.Fatalf("expected report data rows, got: %s", content)
+	}
+}
+
+func TestStatusHealthMetricsCommands(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "ops.db")
+	var stdout bytes.Buffer
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "seed-demo"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "status"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "\"storage_ok\": true") {
+		t.Fatalf("expected storage status in output, got: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "health"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(stdout.String()) != "ok" {
+		t.Fatalf("expected health ok, got: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "metrics"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "calls=") {
+		t.Fatalf("expected metrics output, got: %s", stdout.String())
 	}
 }

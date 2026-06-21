@@ -10,6 +10,7 @@ import (
 type Storage interface {
 	Init(ctx context.Context) error
 	Close() error
+	Ping(ctx context.Context) error
 	InsertEvent(ctx context.Context, event events.ToolEvent) error
 	ListEvents(ctx context.Context, limit int) ([]events.ToolEvent, error)
 	TopTools(ctx context.Context, since time.Time, limit int) ([]ToolCount, error)

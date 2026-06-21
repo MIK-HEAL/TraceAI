@@ -17,6 +17,7 @@ type retryStorage struct {
 
 func (s *retryStorage) Init(ctx context.Context) error { return nil }
 func (s *retryStorage) Close() error                   { return nil }
+func (s *retryStorage) Ping(ctx context.Context) error { return nil }
 func (s *retryStorage) ListEvents(ctx context.Context, limit int) ([]events.ToolEvent, error) {
 	return nil, nil
 }
@@ -103,4 +104,40 @@ func TestBusReportsPermanentFailure(t *testing.T) {
 	default:
 		t.Fatal("expected error on error channel")
 	}
+}
+
+func TestBusPublishDoesNotBlockWhenQueueFull(t *testing.T) {
+	store := &retryStorage{failures: 0}
+	bus := NewBus(store, 1, time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := bus.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	event := events.NewToolEvent()
+	event.AdapterName = "mcp"
+	event.ToolType = "mcp"
+	event.ToolName = "search"
+	event.FunctionName = "tool_call"
+	bus.Publish(event)
+	bus.Publish(event)
+
+	bus.Close()
+	if store.calls == 0 {
+		t.Fatal("expected at least one persisted event")
+	}
+}
+
+func TestBusCloseIsIdempotent(t *testing.T) {
+	store := &retryStorage{failures: 0}
+	bus := NewBus(store, 1, 10*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := bus.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	bus.Close()
+	bus.Close()
 }
