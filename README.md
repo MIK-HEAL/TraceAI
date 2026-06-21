@@ -280,7 +280,10 @@ go build -o bin/toollens ./cmd/toollens
 ./bin/toollens --store sqlite --db trace.db stats
 
 # 输出基础报表
-./bin/toollens --store sqlite --db trace.db report --limit 5
+./bin/toollens --store sqlite --db trace.db report --limit 5 --catalog tools.txt --trend-days 7
+
+# 启动 Dashboard
+./bin/toollens --store sqlite --db trace.db dashboard --addr :8080
 
 # 查看运行状态
 ./bin/toollens --store sqlite --db trace.db status
@@ -339,6 +342,14 @@ top, _ := tsdk.TopTools(ctx, time.Time{}, 10)
 - [MCP 示例](examples/mcp/main.go)
 - [OpenAI 示例](examples/openai/main.go)
 
+### 更多 Adapter
+
+- Claude
+- Cursor
+- LangChain
+- LangGraph
+- A2A
+
 ---
 
 ## 项目状态
@@ -353,7 +364,7 @@ top, _ := tsdk.TopTools(ctx, time.Time{}, 10)
 - [x] CLI 统计命令 (`top-tools`, `top-functions`, `top-agents`, `stats`)
 - [x] 核心路径测试
 
-**MVP 收口中：**
+**MVP 已完成：**
 
 - [x] 去掉 demo 数据的默认自动注入
 - [x] 补数据导出（CSV / JSON）
@@ -361,9 +372,9 @@ top, _ := tsdk.TopTools(ctx, time.Time{}, 10)
 - [x] 补齐安装与使用文档
 - [x] 增加真实接入示例
 - [x] 增加基础报表输出
-- [ ] 完成版本与发布检查
+- [x] 完成版本与发布检查
 
-**Phase 2 起步中：**
+**Phase 2 已完成：**
 
 - [x] `Bus.Publish()` 满队列不再阻塞调用方
 - [x] `Bus.Close()` 可重复调用
@@ -373,6 +384,9 @@ top, _ := tsdk.TopTools(ctx, time.Time{}, 10)
 - [x] 增加健康检查与状态输出
 - [x] 增加 Metrics 预留
 - [x] 增加发布检查清单
+- [x] 更多 Adapter
+- [x] 更完整的分析报表
+- [x] Dashboard
 
 ---
 

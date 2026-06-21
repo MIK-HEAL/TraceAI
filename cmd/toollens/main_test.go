@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"toollens/internal/analytics"
+	"toollens/internal/events"
 	"toollens/internal/storage"
 )
 
@@ -171,22 +172,77 @@ func TestReportCommandOutputsSections(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	store := storage.NewSQLiteStorage(dbPath)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC().Truncate(24 * time.Hour)
+	for i, row := range []struct {
+		when     time.Time
+		toolName string
+		fnName   string
+		success  bool
+		message  string
+	}{
+		{when: now.AddDate(0, 0, -2), toolName: "archive", fnName: "delete_file", success: false, message: "permission denied"},
+		{when: now.AddDate(0, 0, -1), toolName: "docs", fnName: "read_file", success: true, message: ""},
+	} {
+		event := events.NewToolEvent()
+		event.Timestamp = row.when.Add(time.Duration(i) * time.Hour)
+		event.AgentName = "report-agent"
+		event.AgentVersion = "1.0.0"
+		event.AdapterName = "mcp"
+		event.AdapterVersion = "1.0.0"
+		event.ToolType = "mcp"
+		event.ToolName = row.toolName
+		event.FunctionName = row.fnName
+		event.Success = row.success
+		event.ErrorMessage = row.message
+		event.DurationMS = int64(100 + i*10)
+		if err := store.InsertEvent(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	stdout.Reset()
-	if err := run([]string{"--store", "sqlite", "--db", dbPath, "report", "--limit", "3"}, &stdout); err != nil {
+	catalogPath := filepath.Join(tmpDir, "catalog.txt")
+	if err := os.WriteFile(catalogPath, []byte("search\nread\nwrite\ndelete_branch\narchive\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "report", "--limit", "3", "--catalog", catalogPath, "--trend-days", "7"}, &stdout); err != nil {
 		t.Fatal(err)
 	}
 	content := stdout.String()
 	if !strings.Contains(content, "Tool Heatmap") {
 		t.Fatalf("expected tool heatmap section, got: %s", content)
 	}
+	if !strings.Contains(content, "Zero Call Tools") {
+		t.Fatalf("expected zero call section, got: %s", content)
+	}
 	if !strings.Contains(content, "Error Rate Ranking") {
 		t.Fatalf("expected error rate section, got: %s", content)
+	}
+	if !strings.Contains(content, "Behavior Profile") {
+		t.Fatalf("expected behavior profile section, got: %s", content)
+	}
+	if !strings.Contains(content, "Trend") {
+		t.Fatalf("expected trend section, got: %s", content)
 	}
 	if !strings.Contains(content, "Agent Usage") {
 		t.Fatalf("expected agent usage section, got: %s", content)
 	}
-	if !strings.Contains(content, "search") {
-		t.Fatalf("expected report data rows, got: %s", content)
+	if !strings.Contains(content, "delete_branch") {
+		t.Fatalf("expected zero call output, got: %s", content)
+	}
+	if !strings.Contains(content, "delta calls=") {
+		t.Fatalf("expected trend delta output, got: %s", content)
+	}
+	if !strings.Contains(content, "read-heavy") && !strings.Contains(content, "balanced") {
+		t.Fatalf("expected behavior profile output, got: %s", content)
 	}
 }
 

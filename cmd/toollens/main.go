@@ -15,6 +15,7 @@ import (
 
 	"toollens/internal/analytics"
 	"toollens/internal/config"
+	"toollens/internal/dashboard"
 	"toollens/internal/events"
 	"toollens/internal/storage"
 	"toollens/pkg/sdk"
@@ -64,6 +65,8 @@ func run(argv []string, out io.Writer) error {
 		return runStats(engine, args[1:], out)
 	case "report":
 		return runReport(engine, args[1:], out)
+	case "dashboard":
+		return runDashboard(store, args[1:], out)
 	case "status":
 		return runStatus(sdk.New(store), out)
 	case "health":
@@ -206,46 +209,28 @@ func runMetrics(client *sdk.SDK, out io.Writer) error {
 func runReport(engine *analytics.Engine, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("report", flag.ExitOnError)
 	limit := fs.Int("limit", 5, "result limit")
+	catalog := fs.String("catalog", "", "expected tools catalog (file path or comma-separated list)")
+	trendDays := fs.Int("trend-days", 7, "days to include in the trend section")
 	_ = fs.Parse(args)
 
-	tools, err := engine.TopTools(context.Background(), time.Time{}, *limit)
+	report, err := makeReport(context.Background(), engine, *limit, *catalog, *trendDays)
 	if err != nil {
 		return err
 	}
-	failures, err := engine.ToolFailureRates(context.Background(), time.Time{}, *limit)
-	if err != nil {
-		return err
-	}
-	agents, err := engine.TopAgents(context.Background(), time.Time{}, *limit)
-	if err != nil {
-		return err
-	}
+	_, err = fmt.Fprint(out, report)
+	return err
+}
 
-	if _, err := fmt.Fprintln(out, "Tool Heatmap"); err != nil {
+func runDashboard(store storage.Storage, args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("dashboard", flag.ExitOnError)
+	addr := fs.String("addr", ":8080", "listen address")
+	_ = fs.Parse(args)
+
+	_, err := fmt.Fprintf(out, "dashboard listening on %s\n", *addr)
+	if err != nil {
 		return err
 	}
-	for _, row := range tools {
-		if _, err := fmt.Fprintf(out, "%-18s calls=%-4d success=%-4d\n", row.ToolName, row.Calls, row.Success); err != nil {
-			return err
-		}
-	}
-	if _, err := fmt.Fprintln(out, "\nError Rate Ranking"); err != nil {
-		return err
-	}
-	for _, row := range failures {
-		if _, err := fmt.Fprintf(out, "%-18s calls=%-4d failures=%-4d rate=%.1f%%\n", row.ToolName, row.Calls, row.Failures, row.FailureRate*100); err != nil {
-			return err
-		}
-	}
-	if _, err := fmt.Fprintln(out, "\nAgent Usage"); err != nil {
-		return err
-	}
-	for _, row := range agents {
-		if _, err := fmt.Fprintf(out, "%-18s calls=%-4d success=%-4d\n", row.AgentName, row.Calls, row.Success); err != nil {
-			return err
-		}
-	}
-	return nil
+	return dashboard.New(store).ListenAndServe(*addr)
 }
 
 func runExport(engine *analytics.Engine, args []string, out io.Writer) error {
@@ -497,9 +482,10 @@ ToolLens
 Usage:
   toollens [--store sqlite|memory] [--db path] top-tools
   toollens [--store sqlite|memory] [--db path] top-functions
-  toollens [--store sqlite|memory] [--db path] top-agents
-  toollens [--store sqlite|memory] [--db path] stats
-  toollens [--store sqlite|memory] [--db path] report [--limit n]
+	toollens [--store sqlite|memory] [--db path] top-agents
+	toollens [--store sqlite|memory] [--db path] stats
+  toollens [--store sqlite|memory] [--db path] report [--limit n] [--catalog path|tool1,tool2] [--trend-days n]
+  toollens [--store sqlite|memory] [--db path] dashboard [--addr :8080]
   toollens [--store sqlite|memory] [--db path] status
   toollens [--store sqlite|memory] [--db path] health
   toollens [--store sqlite|memory] [--db path] metrics
