@@ -208,7 +208,7 @@ query_table     query_table     query_table     query_table
               │           │           │
         ┌─────▼─────┐ ┌──▼──┐ ┌─────▼─────┐
         │  CLI      │ │ SDK │ │ Dashboard │
-        │  top-tools│ │ Go  │ │  (计划中)  │
+        │  top-tools│ │ Go  │ │  Web UI   │
         │  stats    │ │     │ │           │
         └───────────┘ └─────┘ └───────────┘
 ```
@@ -302,6 +302,9 @@ go build -o bin/toollens ./cmd/toollens
 
 # 导出统计快照为 JSON
 ./bin/toollens --store sqlite --db trace.db export stats --format json --output stats.json
+
+# 导出月报快照
+./bin/toollens --store sqlite --db trace.db export monthly-stats --format json --output monthly-stats.json
 ```
 
 Windows 下把 `./bin/toollens` 换成 `.\bin\toollens.exe` 即可。

@@ -42,6 +42,14 @@ func TestEndToEndSmoke(t *testing.T) {
 		t.Fatalf("expected 2 tools, got %d", len(topTools))
 	}
 
+	monthly, err := client.MonthlyStats(ctx, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(monthly) != 1 {
+		t.Fatalf("expected 1 monthly row, got %d", len(monthly))
+	}
+
 	stats, err := client.Engine.Stats(ctx, time.Time{})
 	if err != nil {
 		t.Fatal(err)

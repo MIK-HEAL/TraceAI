@@ -283,6 +283,12 @@ func runExport(engine *analytics.Engine, args []string, out io.Writer) error {
 			return err
 		}
 		return writeDailyStatsExport(writer, *format, rows)
+	case "monthly-stats":
+		rows, err := engine.MonthlyStats(context.Background(), time.Time{})
+		if err != nil {
+			return err
+		}
+		return writeMonthlyStatsExport(writer, *format, rows)
 	default:
 		return fmt.Errorf("unknown export target %q", target)
 	}
@@ -425,6 +431,39 @@ func writeDailyStatsExport(w io.Writer, format string, rows []storage.DailyStat)
 	}
 }
 
+func writeMonthlyStatsExport(w io.Writer, format string, rows []storage.MonthlyStat) error {
+	switch format {
+	case "json":
+		payload := make([]exportMonthlyStatRow, 0, len(rows))
+		for _, row := range rows {
+			payload = append(payload, exportMonthlyStatRow{
+				StatMonth:       row.StatMonth,
+				Calls:           row.Calls,
+				Success:         row.Success,
+				TotalDurationMS: row.TotalDurationMS,
+				InputSize:       row.InputSize,
+				OutputSize:      row.OutputSize,
+			})
+		}
+		return writeJSON(w, payload)
+	case "csv":
+		records := make([][]string, 0, len(rows))
+		for _, row := range rows {
+			records = append(records, []string{
+				row.StatMonth,
+				strconv.FormatInt(row.Calls, 10),
+				strconv.FormatInt(row.Success, 10),
+				strconv.FormatInt(row.TotalDurationMS, 10),
+				strconv.FormatInt(row.InputSize, 10),
+				strconv.FormatInt(row.OutputSize, 10),
+			})
+		}
+		return writeCSV(w, []string{"stat_month", "calls", "success", "total_duration_ms", "input_size", "output_size"}, records)
+	default:
+		return fmt.Errorf("unsupported export format %q", format)
+	}
+}
+
 func writeCSV(w io.Writer, headers []string, records [][]string) error {
 	cw := csv.NewWriter(w)
 	if err := cw.Write(headers); err != nil {
@@ -490,7 +529,7 @@ Usage:
   toollens [--store sqlite|memory] [--db path] health
   toollens [--store sqlite|memory] [--db path] metrics
   toollens [--store sqlite|memory] [--db path] seed-demo
-  toollens [--store sqlite|memory] [--db path] export <top-tools|top-functions|top-agents|stats|daily-stats> [--format csv|json] [--output path]
+  toollens [--store sqlite|memory] [--db path] export <top-tools|top-functions|top-agents|stats|daily-stats|monthly-stats> [--format csv|json] [--output path]
 `))
 }
 
@@ -522,6 +561,15 @@ type exportStatsRow struct {
 
 type exportDailyStatRow struct {
 	StatDay         string `json:"stat_day"`
+	Calls           int64  `json:"calls"`
+	Success         int64  `json:"success"`
+	TotalDurationMS int64  `json:"total_duration_ms"`
+	InputSize       int64  `json:"input_size"`
+	OutputSize      int64  `json:"output_size"`
+}
+
+type exportMonthlyStatRow struct {
+	StatMonth       string `json:"stat_month"`
 	Calls           int64  `json:"calls"`
 	Success         int64  `json:"success"`
 	TotalDurationMS int64  `json:"total_duration_ms"`

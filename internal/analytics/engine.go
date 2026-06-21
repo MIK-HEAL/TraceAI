@@ -38,3 +38,7 @@ func (e *Engine) Stats(ctx context.Context, since time.Time) (storage.Stats, err
 func (e *Engine) DailyStats(ctx context.Context, since time.Time) ([]storage.DailyStat, error) {
 	return e.Store.DailyStats(ctx, since)
 }
+
+func (e *Engine) MonthlyStats(ctx context.Context, since time.Time) ([]storage.MonthlyStat, error) {
+	return e.Store.MonthlyStats(ctx, since)
+}

@@ -219,6 +219,41 @@ func (s *MemoryStorage) DailyStats(ctx context.Context, since time.Time) ([]Dail
 	return items, nil
 }
 
+func (s *MemoryStorage) MonthlyStats(ctx context.Context, since time.Time) ([]MonthlyStat, error) {
+	_ = ctx
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	counts := map[string]*MonthlyStat{}
+	for _, event := range s.events {
+		if !since.IsZero() && event.Timestamp.Before(since) {
+			continue
+		}
+		month := event.Timestamp.UTC().Format("2006-01")
+		item, ok := counts[month]
+		if !ok {
+			item = &MonthlyStat{StatMonth: month}
+			counts[month] = item
+		}
+		item.Calls++
+		if event.Success {
+			item.Success++
+		}
+		item.TotalDurationMS += event.DurationMS
+		item.InputSize += event.InputSize
+		item.OutputSize += event.OutputSize
+	}
+
+	items := make([]MonthlyStat, 0, len(counts))
+	for _, item := range counts {
+		items = append(items, *item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].StatMonth < items[j].StatMonth
+	})
+	return items, nil
+}
+
 func (s *MemoryStorage) topCounts(ctx context.Context, since time.Time, limit int, keyFn func(events.ToolEvent) string) ([]ToolCount, error) {
 	_ = ctx
 	s.mu.RLock()

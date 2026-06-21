@@ -293,6 +293,36 @@ func (s *SQLiteStorage) DailyStats(ctx context.Context, since time.Time) ([]Dail
 	return out, rows.Err()
 }
 
+func (s *SQLiteStorage) MonthlyStats(ctx context.Context, since time.Time) ([]MonthlyStat, error) {
+	where, args := sinceClause(since)
+	query := fmt.Sprintf(`
+		SELECT substr(timestamp, 1, 7) AS stat_month,
+			COUNT(*) AS calls,
+			COALESCE(SUM(success), 0) AS success_count,
+			COALESCE(SUM(duration_ms), 0) AS total_duration_ms,
+			COALESCE(SUM(input_size), 0) AS input_size,
+			COALESCE(SUM(output_size), 0) AS output_size
+		FROM events %s
+		GROUP BY stat_month
+		ORDER BY stat_month ASC
+	`, where)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []MonthlyStat
+	for rows.Next() {
+		var item MonthlyStat
+		if err := rows.Scan(&item.StatMonth, &item.Calls, &item.Success, &item.TotalDurationMS, &item.InputSize, &item.OutputSize); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func (s *SQLiteStorage) topCounts(ctx context.Context, since time.Time, limit int, baseQuery, column string) ([]ToolCount, error) {
 	where, args := sinceClause(since)
 	limitClause := ""

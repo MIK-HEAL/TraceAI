@@ -39,6 +39,9 @@ func (s *retryStorage) Stats(ctx context.Context, since time.Time) (storage.Stat
 func (s *retryStorage) DailyStats(ctx context.Context, since time.Time) ([]storage.DailyStat, error) {
 	return nil, nil
 }
+func (s *retryStorage) MonthlyStats(ctx context.Context, since time.Time) ([]storage.MonthlyStat, error) {
+	return nil, nil
+}
 func (s *retryStorage) InsertEvent(ctx context.Context, event events.ToolEvent) error {
 	s.calls++
 	if s.calls <= s.failures {

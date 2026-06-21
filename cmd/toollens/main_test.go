@@ -164,6 +164,57 @@ func TestExportStatsJSON(t *testing.T) {
 	}
 }
 
+func TestExportMonthlyStatsJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "monthly-export.db")
+	jsonPath := filepath.Join(tmpDir, "monthly.json")
+	var stdout bytes.Buffer
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "seed-demo"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+
+	store := storage.NewSQLiteStorage(dbPath)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	oldEvent := events.NewToolEvent()
+	oldEvent.Timestamp = time.Now().UTC().AddDate(0, -1, 0)
+	oldEvent.AgentName = "monthly-agent"
+	oldEvent.AgentVersion = "1.0.0"
+	oldEvent.AdapterName = "mcp"
+	oldEvent.AdapterVersion = "1.0.0"
+	oldEvent.ToolType = "mcp"
+	oldEvent.ToolName = "archive"
+	oldEvent.FunctionName = "delete_file"
+	oldEvent.Success = true
+	oldEvent.DurationMS = 120
+	oldEvent.InputSize = 44
+	oldEvent.OutputSize = 12
+	if err := store.InsertEvent(context.Background(), oldEvent); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "export", "monthly-stats", "--format", "json", "--output", jsonPath}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	currentMonth := time.Now().UTC().Format("2006-01")
+	prevMonth := time.Now().UTC().AddDate(0, -1, 0).Format("2006-01")
+	if !strings.Contains(content, "\"stat_month\"") {
+		t.Fatalf("unexpected monthly export: %s", content)
+	}
+	if !strings.Contains(content, currentMonth) || !strings.Contains(content, prevMonth) {
+		t.Fatalf("expected both month buckets in export, got: %s", content)
+	}
+}
+
 func TestReportCommandOutputsSections(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "report.db")

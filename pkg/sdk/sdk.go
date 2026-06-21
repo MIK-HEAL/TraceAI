@@ -41,6 +41,10 @@ func (s *SDK) TopTools(ctx context.Context, since time.Time, limit int) ([]stora
 	return s.Engine.TopTools(ctx, since, limit)
 }
 
+func (s *SDK) MonthlyStats(ctx context.Context, since time.Time) ([]storage.MonthlyStat, error) {
+	return s.Engine.MonthlyStats(ctx, since)
+}
+
 func (s *SDK) Status(ctx context.Context) (state.Status, error) {
 	status := state.Status{
 		CheckedAt: time.Now().UTC(),
