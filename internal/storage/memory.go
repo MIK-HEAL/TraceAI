@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"toollens/internal/events"
+	"github.com/MIK-HEAL/TraceAI/internal/events"
 )
 
 type MemoryStorage struct {

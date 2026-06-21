@@ -3,7 +3,7 @@ package adapters
 import (
 	"time"
 
-	"toollens/internal/events"
+	"github.com/MIK-HEAL/TraceAI/internal/events"
 )
 
 type Capture struct {

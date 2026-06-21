@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"toollens/internal/events"
+	"github.com/MIK-HEAL/TraceAI/internal/events"
 )
 
 func TestMemoryStorageStats(t *testing.T) {

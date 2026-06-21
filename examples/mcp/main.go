@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"toollens/internal/adapters"
-	"toollens/internal/storage"
-	"toollens/pkg/sdk"
+	"github.com/MIK-HEAL/TraceAI/internal/adapters"
+	"github.com/MIK-HEAL/TraceAI/internal/storage"
+	"github.com/MIK-HEAL/TraceAI/pkg/sdk"
 )
 
 func main() {

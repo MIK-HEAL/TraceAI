@@ -1,4 +1,4 @@
-module toollens
+module github.com/MIK-HEAL/TraceAI
 
 go 1.25.0
 

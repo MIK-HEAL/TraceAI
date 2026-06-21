@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"toollens/internal/events"
-	"toollens/internal/storage"
+	"github.com/MIK-HEAL/TraceAI/internal/events"
+	"github.com/MIK-HEAL/TraceAI/internal/storage"
 )
 
 type retryStorage struct {

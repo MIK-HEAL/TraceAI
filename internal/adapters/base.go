@@ -3,7 +3,7 @@ package adapters
 import (
 	"sync"
 
-	"toollens/internal/events"
+	"github.com/MIK-HEAL/TraceAI/internal/events"
 )
 
 type baseAdapter struct {

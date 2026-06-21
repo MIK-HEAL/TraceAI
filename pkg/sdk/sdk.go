@@ -4,11 +4,11 @@ import (
 	"context"
 	"time"
 
-	"toollens/internal/analytics"
-	"toollens/internal/collector"
-	"toollens/internal/events"
-	"toollens/internal/storage"
-	"toollens/pkg/state"
+	"github.com/MIK-HEAL/TraceAI/internal/analytics"
+	"github.com/MIK-HEAL/TraceAI/internal/collector"
+	"github.com/MIK-HEAL/TraceAI/internal/events"
+	"github.com/MIK-HEAL/TraceAI/internal/storage"
+	"github.com/MIK-HEAL/TraceAI/pkg/state"
 )
 
 type SDK struct {

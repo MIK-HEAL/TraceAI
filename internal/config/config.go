@@ -19,7 +19,7 @@ type Config struct {
 func Load(fs *flag.FlagSet) *Config {
 	cfg := &Config{
 		Store:      envOrDefault("TRACEAI_STORE", "sqlite"),
-		DB:         envOrDefault("TRACEAI_DB", "toollens.db"),
+		DB:         envOrDefault("TRACEAI_DB", "traceai.db"),
 		ConfigPath: envOrDefault("TRACEAI_CONFIG", ""),
 		LogLevel:   envOrDefault("TRACEAI_LOG_LEVEL", "info"),
 		LogFormat:  envOrDefault("TRACEAI_LOG_FORMAT", "text"),

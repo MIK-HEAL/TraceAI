@@ -11,7 +11,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"toollens/internal/events"
+	"github.com/MIK-HEAL/TraceAI/internal/events"
 )
 
 type SQLiteStorage struct {
@@ -22,7 +22,7 @@ type SQLiteStorage struct {
 
 func NewSQLiteStorage(path string) *SQLiteStorage {
 	if path == "" {
-		path = "toollens.db"
+		path = "traceai.db"
 	}
 	return &SQLiteStorage{path: path}
 }

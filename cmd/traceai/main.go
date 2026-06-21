@@ -17,14 +17,14 @@ import (
 	"syscall"
 	"time"
 
-	"toollens/internal/analytics"
-	"toollens/internal/config"
-	"toollens/internal/dashboard"
-	"toollens/internal/events"
-	"toollens/internal/logging"
-	"toollens/internal/storage"
-	"toollens/pkg/sdk"
-	"toollens/pkg/state"
+	"github.com/MIK-HEAL/TraceAI/internal/analytics"
+	"github.com/MIK-HEAL/TraceAI/internal/config"
+	"github.com/MIK-HEAL/TraceAI/internal/dashboard"
+	"github.com/MIK-HEAL/TraceAI/internal/events"
+	"github.com/MIK-HEAL/TraceAI/internal/logging"
+	"github.com/MIK-HEAL/TraceAI/internal/storage"
+	"github.com/MIK-HEAL/TraceAI/pkg/sdk"
+	"github.com/MIK-HEAL/TraceAI/pkg/state"
 )
 
 var (
@@ -41,7 +41,7 @@ func main() {
 }
 
 func run(argv []string, out io.Writer) error {
-	fs := flag.NewFlagSet("toollens", flag.ExitOnError)
+	fs := flag.NewFlagSet("traceai", flag.ExitOnError)
 	cfg := config.Load(fs)
 	_ = fs.Parse(argv)
 	if err := config.ApplyFile(fs, cfg); err != nil {
@@ -607,21 +607,21 @@ func wrapError(action string, err error) error {
 
 func printUsage(out io.Writer) {
 	fmt.Fprintln(out, strings.TrimSpace(`
-ToolLens
+TraceAI
 
 Usage:
-  toollens [--store sqlite|memory] [--db path] top-tools
-  toollens [--store sqlite|memory] [--db path] top-functions
-  toollens [--store sqlite|memory] [--db path] top-agents
-  toollens [--store sqlite|memory] [--db path] stats
-  toollens [--store sqlite|memory] [--db path] version
-  toollens [--store sqlite|memory] [--db path] report [--limit n] [--catalog path|tool1,tool2] [--trend-days n]
-  toollens [--store sqlite|memory] [--db path] dashboard [--addr 127.0.0.1:8080] [--token value]
-  toollens [--store sqlite|memory] [--db path] status
-  toollens [--store sqlite|memory] [--db path] health
-  toollens [--store sqlite|memory] [--db path] metrics [--format text|json]
-  toollens [--store sqlite|memory] [--db path] seed-demo
-  toollens [--store sqlite|memory] [--db path] export <top-tools|top-functions|top-agents|stats|daily-stats|weekly-stats|monthly-stats> [--format csv|json] [--output path]
+  traceai [--store sqlite|memory] [--db path] top-tools
+  traceai [--store sqlite|memory] [--db path] top-functions
+  traceai [--store sqlite|memory] [--db path] top-agents
+  traceai [--store sqlite|memory] [--db path] stats
+  traceai [--store sqlite|memory] [--db path] version
+  traceai [--store sqlite|memory] [--db path] report [--limit n] [--catalog path|tool1,tool2] [--trend-days n]
+  traceai [--store sqlite|memory] [--db path] dashboard [--addr 127.0.0.1:8080] [--token value]
+  traceai [--store sqlite|memory] [--db path] status
+  traceai [--store sqlite|memory] [--db path] health
+  traceai [--store sqlite|memory] [--db path] metrics [--format text|json]
+  traceai [--store sqlite|memory] [--db path] seed-demo
+  traceai [--store sqlite|memory] [--db path] export <top-tools|top-functions|top-agents|stats|daily-stats|weekly-stats|monthly-stats> [--format csv|json] [--output path]
 `))
 }
 

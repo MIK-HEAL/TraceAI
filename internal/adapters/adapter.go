@@ -1,6 +1,6 @@
 package adapters
 
-import "toollens/internal/events"
+import "github.com/MIK-HEAL/TraceAI/internal/events"
 
 type Adapter interface {
 	Name() string

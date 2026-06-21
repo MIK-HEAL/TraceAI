@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"toollens/internal/events"
+	"github.com/MIK-HEAL/TraceAI/internal/events"
 )
 
 type Storage interface {

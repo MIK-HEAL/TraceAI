@@ -1,5 +1,8 @@
 .gocache/
 .tmp/
+.modcache/
+bin/
 design/
 task/
 toollens.exe
+traceai.exe

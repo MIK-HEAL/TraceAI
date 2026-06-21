@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"toollens/internal/events"
+	"github.com/MIK-HEAL/TraceAI/internal/events"
 )
 
 func TestSQLiteStorageMatchesMemoryAggregates(t *testing.T) {

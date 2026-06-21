@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"toollens/internal/storage"
+	"github.com/MIK-HEAL/TraceAI/internal/storage"
 )
 
 type Engine struct {

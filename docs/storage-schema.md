@@ -1,4 +1,4 @@
-# ToolLens SQLite 表结构
+# TraceAI SQLite 表结构
 
 ## events
 

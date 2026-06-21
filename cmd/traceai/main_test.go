@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"toollens/internal/analytics"
-	"toollens/internal/events"
-	"toollens/internal/storage"
+	"github.com/MIK-HEAL/TraceAI/internal/analytics"
+	"github.com/MIK-HEAL/TraceAI/internal/events"
+	"github.com/MIK-HEAL/TraceAI/internal/storage"
 )
 
 func TestEmptyStorageHasNoSeedData(t *testing.T) {

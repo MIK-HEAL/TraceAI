@@ -1,7 +1,7 @@
 package adapters
 
 import (
-	"toollens/internal/events"
+	"github.com/MIK-HEAL/TraceAI/internal/events"
 )
 
 type MCPAdapter struct {
