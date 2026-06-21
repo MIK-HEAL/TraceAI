@@ -10,9 +10,11 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"toollens/internal/analytics"
@@ -25,7 +27,11 @@ import (
 	"toollens/pkg/state"
 )
 
-var version = "dev"
+var (
+	version     = "dev"
+	buildCommit = "unknown"
+	buildDate   = "unknown"
+)
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout); err != nil {
@@ -51,16 +57,22 @@ func run(argv []string, out io.Writer) error {
 	slog.Default().With("component", "cli", "command", args[0]).Info("command start")
 	defer slog.Default().With("component", "cli", "command", args[0]).Info("command finish")
 
-	store, err := storage.New(storage.Config{Backend: cfg.Store, Path: cfg.DB})
-	if err != nil {
-		return wrapError("create storage", err)
+	var store storage.Storage
+	var engine *analytics.Engine
+	if commandNeedsStorage(args[0]) {
+		var err error
+		store, err = storage.New(storage.Config{Backend: cfg.Store, Path: cfg.DB})
+		if err != nil {
+			return wrapError("create storage", err)
+		}
+		if err := store.Init(context.Background()); err != nil {
+			return wrapError("init storage", err)
+		}
+		defer store.Close()
 	}
-	if err := store.Init(context.Background()); err != nil {
-		return wrapError("init storage", err)
+	if store != nil {
+		engine = analytics.NewEngine(store)
 	}
-	defer store.Close()
-
-	engine := analytics.NewEngine(store)
 
 	switch args[0] {
 	case "version":
@@ -94,6 +106,17 @@ func run(argv []string, out io.Writer) error {
 	default:
 		printUsage(out)
 		return nil
+	}
+}
+
+func commandNeedsStorage(command string) bool {
+	switch command {
+	case "top-tools", "top-functions", "top-agents", "stats", "report", "dashboard", "status", "health", "metrics", "export", "seed-demo":
+		return true
+	case "version":
+		return false
+	default:
+		return false
 	}
 }
 
@@ -204,7 +227,7 @@ func runHealth(client *sdk.SDK, out io.Writer) error {
 }
 
 func runVersion(out io.Writer) error {
-	_, err := fmt.Fprintln(out, version)
+	_, err := fmt.Fprintf(out, "version=%s commit=%s date=%s\n", version, buildCommit, buildDate)
 	return err
 }
 
@@ -252,14 +275,14 @@ func runReport(engine *analytics.Engine, args []string, out io.Writer) error {
 
 func runDashboard(store storage.Storage, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("dashboard", flag.ExitOnError)
-	addr := fs.String("addr", ":8080", "listen address")
+	addr := fs.String("addr", "127.0.0.1:8080", "listen address")
+	token := fs.String("token", "", "dashboard bearer token")
 	_ = fs.Parse(args)
 
-	_, err := fmt.Fprintf(out, "dashboard listening on %s\n", *addr)
-	if err != nil {
-		return err
-	}
-	return dashboard.New(store).ListenAndServe(*addr)
+	slog.Default().With("component", "cli", "command", "dashboard", "addr", *addr).Info("dashboard starting")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return dashboard.New(store).Serve(ctx, *addr, *token)
 }
 
 func runExport(engine *analytics.Engine, args []string, out io.Writer) error {
@@ -593,7 +616,7 @@ Usage:
   toollens [--store sqlite|memory] [--db path] stats
   toollens [--store sqlite|memory] [--db path] version
   toollens [--store sqlite|memory] [--db path] report [--limit n] [--catalog path|tool1,tool2] [--trend-days n]
-  toollens [--store sqlite|memory] [--db path] dashboard [--addr :8080]
+  toollens [--store sqlite|memory] [--db path] dashboard [--addr 127.0.0.1:8080] [--token value]
   toollens [--store sqlite|memory] [--db path] status
   toollens [--store sqlite|memory] [--db path] health
   toollens [--store sqlite|memory] [--db path] metrics [--format text|json]

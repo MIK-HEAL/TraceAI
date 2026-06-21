@@ -1,4 +1,5 @@
 .gocache/
+.tmp/
 design/
 task/
 toollens.exe

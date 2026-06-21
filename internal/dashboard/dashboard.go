@@ -1,9 +1,12 @@
 package dashboard
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"html"
 	"html/template"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -177,20 +180,55 @@ func New(store storage.Storage) *Dashboard {
 	return &Dashboard{engine: analytics.NewEngine(store)}
 }
 
-func (d *Dashboard) Handler() http.Handler {
+func (d *Dashboard) Handler(token string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", d.overview)
 	mux.HandleFunc("/tools", d.tools)
 	mux.HandleFunc("/agents", d.agents)
 	mux.HandleFunc("/errors", d.errors)
-	return mux
+	return authMiddleware(token, mux)
 }
 
-func (d *Dashboard) ListenAndServe(addr string) error {
-	return (&http.Server{
-		Addr:    addr,
-		Handler: d.Handler(),
-	}).ListenAndServe()
+func (d *Dashboard) Serve(ctx context.Context, addr, token string) error {
+	if token == "" && !isLoopbackBind(addr) {
+		return errors.New("dashboard token required for non-local bind address")
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+	return d.ServeListener(ctx, ln, token)
+}
+
+func (d *Dashboard) ServeListener(ctx context.Context, ln net.Listener, token string) error {
+	srv := &http.Server{
+		Handler:           d.Handler(token),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- srv.Serve(ln)
+	}()
+
+	select {
+	case err := <-serveErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			return err
+		}
+		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}
 }
 
 func (d *Dashboard) overview(w http.ResponseWriter, r *http.Request) {
@@ -488,6 +526,49 @@ func renderEventTable(rows []events.ToolEvent) string {
 
 func writeServerError(w http.ResponseWriter, err error) {
 	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+func authMiddleware(token string, next http.Handler) http.Handler {
+	if strings.TrimSpace(token) == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(r, token) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="TraceAI Dashboard"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func authorized(r *http.Request, token string) bool {
+	if strings.TrimSpace(token) == "" {
+		return true
+	}
+	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+	if strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
+		if strings.TrimSpace(authorization[len("Bearer "):]) == token {
+			return true
+		}
+	}
+	if strings.TrimSpace(r.Header.Get("X-TraceAI-Token")) == token {
+		return true
+	}
+	return false
+}
+
+func isLoopbackBind(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	if host == "" || strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func filterFailedEvents(rows []events.ToolEvent, limit int) []events.ToolEvent {

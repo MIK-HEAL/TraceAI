@@ -284,14 +284,20 @@ go build -o bin/toollens ./cmd/toollens
 # 查看版本
 ./bin/toollens version
 
+# 发布时注入版本信息
+go build -ldflags "-X main.version=v0.1.0 -X main.buildCommit=git-sha -X main.buildDate=2026-06-21T00:00:00Z" -o bin/toollens ./cmd/toollens
+
 # 查看总体统计
 ./bin/toollens --store sqlite --db trace.db stats
 
 # 输出基础报表
 ./bin/toollens --store sqlite --db trace.db report --limit 5 --catalog tools.txt --trend-days 7
 
-# 启动 Dashboard
-./bin/toollens --store sqlite --db trace.db dashboard --addr :8080
+# 启动 Dashboard（默认只监听本机）
+./bin/toollens --store sqlite --db trace.db dashboard --addr 127.0.0.1:8080
+
+# 对外暴露时加 token
+./bin/toollens --store sqlite --db trace.db dashboard --addr 0.0.0.0:8080 --token your-secret
 
 # 查看运行状态
 ./bin/toollens --store sqlite --db trace.db status
@@ -387,6 +393,7 @@ top, _ := tsdk.TopTools(ctx, time.Time{}, 10)
 - [x] 增加真实接入示例
 - [x] 增加基础报表输出
 - [x] 完成版本与发布检查
+- [x] 版本信息可通过构建参数注入
 
 **Phase 2 已完成：**
 

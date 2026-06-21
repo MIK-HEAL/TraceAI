@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,7 +28,7 @@ func TestDashboardPages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := httptest.NewServer(New(store).Handler())
+	srv := httptest.NewServer(New(store).Handler(""))
 	defer srv.Close()
 
 	assertPage := func(path, want string) {
@@ -53,6 +54,89 @@ func TestDashboardPages(t *testing.T) {
 	assertPage("/tools", "Tool Heatmap")
 	assertPage("/agents", "Behavior Profile")
 	assertPage("/errors", "Recent Failures")
+}
+
+func TestDashboardTokenAuth(t *testing.T) {
+	store := storage.NewMemoryStorage()
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	srv := httptest.NewServer(New(store).Handler("secret"))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized, got %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	req, err = http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer secret")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected ok, got %d", resp.StatusCode)
+	}
+}
+
+func TestDashboardServeStopsOnContextCancel(t *testing.T) {
+	store := storage.NewMemoryStorage()
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- New(store).ServeListener(ctx, ln, "")
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("expected graceful shutdown, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected server to stop after context cancel")
+	}
+}
+
+func TestDashboardRequiresTokenForNonLocalBind(t *testing.T) {
+	store := storage.NewMemoryStorage()
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	err := New(store).Serve(context.Background(), "0.0.0.0:0", "")
+	if err == nil {
+		t.Fatal("expected non-local bind without token to fail")
+	}
 }
 
 func testEvent(agent, adapter, toolName, functionName string, success bool, message string) events.ToolEvent {

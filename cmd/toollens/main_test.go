@@ -330,8 +330,18 @@ func TestVersionCommandOutputsVersion(t *testing.T) {
 	if err := run([]string{"--store", "memory", "version"}, &stdout); err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(stdout.String()) == "" {
+	if !strings.Contains(stdout.String(), "version=") {
 		t.Fatal("expected version output")
+	}
+}
+
+func TestVersionCommandDoesNotNeedStorage(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := run([]string{"--store", "sqlite", "--db", filepath.Join(t.TempDir(), "broken.db"), "version"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "version=") {
+		t.Fatalf("expected version output, got %q", stdout.String())
 	}
 }
 
