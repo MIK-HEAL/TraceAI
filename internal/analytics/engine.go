@@ -42,3 +42,11 @@ func (e *Engine) DailyStats(ctx context.Context, since time.Time) ([]storage.Dai
 func (e *Engine) MonthlyStats(ctx context.Context, since time.Time) ([]storage.MonthlyStat, error) {
 	return e.Store.MonthlyStats(ctx, since)
 }
+
+func (e *Engine) WeeklyStats(ctx context.Context, since time.Time) ([]storage.WeeklyStat, error) {
+	return e.Store.WeeklyStats(ctx, since)
+}
+
+func (e *Engine) ErrorBreakdowns(ctx context.Context, since time.Time, limit int) ([]storage.ErrorBreakdown, error) {
+	return e.Store.ErrorBreakdowns(ctx, since, limit)
+}

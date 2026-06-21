@@ -3,7 +3,10 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +44,7 @@ func (s *MemoryStorage) Ping(ctx context.Context) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.closed {
+		slog.Default().With("component", "storage", "backend", "memory").Warn("storage ping failed", "reason", "closed")
 		return errors.New("storage closed")
 	}
 	return nil
@@ -49,11 +53,13 @@ func (s *MemoryStorage) Ping(ctx context.Context) error {
 func (s *MemoryStorage) InsertEvent(ctx context.Context, event events.ToolEvent) error {
 	_ = ctx
 	if err := event.Validate(); err != nil {
+		slog.Default().With("component", "storage", "backend", "memory").Error("insert event failed", "event_id", event.EventID, "error", err)
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		slog.Default().With("component", "storage", "backend", "memory").Error("insert event failed", "reason", "closed", "event_id", event.EventID)
 		return errors.New("storage closed")
 	}
 	s.events = append(s.events, event.Clone())
@@ -254,6 +260,96 @@ func (s *MemoryStorage) MonthlyStats(ctx context.Context, since time.Time) ([]Mo
 	return items, nil
 }
 
+func (s *MemoryStorage) WeeklyStats(ctx context.Context, since time.Time) ([]WeeklyStat, error) {
+	_ = ctx
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	counts := map[string]*WeeklyStat{}
+	for _, event := range s.events {
+		if !since.IsZero() && event.Timestamp.Before(since) {
+			continue
+		}
+		week := weekBucket(event.Timestamp)
+		item, ok := counts[week]
+		if !ok {
+			item = &WeeklyStat{StatWeek: week}
+			counts[week] = item
+		}
+		item.Calls++
+		if event.Success {
+			item.Success++
+		}
+		item.TotalDurationMS += event.DurationMS
+		item.InputSize += event.InputSize
+		item.OutputSize += event.OutputSize
+	}
+
+	items := make([]WeeklyStat, 0, len(counts))
+	for _, item := range counts {
+		items = append(items, *item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].StatWeek < items[j].StatWeek
+	})
+	return items, nil
+}
+
+func (s *MemoryStorage) ErrorBreakdowns(ctx context.Context, since time.Time, limit int) ([]ErrorBreakdown, error) {
+	_ = ctx
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	type aggregate struct {
+		ErrorBreakdown
+	}
+
+	counts := map[string]*aggregate{}
+	for _, event := range s.events {
+		if !since.IsZero() && event.Timestamp.Before(since) {
+			continue
+		}
+		if event.Success && event.ErrorType == "" && event.ErrorCode == "" && event.ErrorMessage == "" {
+			continue
+		}
+		category := classifyFailure(event.ErrorType, event.ErrorCode, event.ErrorMessage)
+		key := fmt.Sprintf("%s|%s|%s", category, event.ErrorType, event.ErrorCode)
+		item, ok := counts[key]
+		if !ok {
+			item = &aggregate{ErrorBreakdown: ErrorBreakdown{Category: category, ErrorType: event.ErrorType, ErrorCode: event.ErrorCode}}
+			counts[key] = item
+		}
+		item.Calls++
+		if !event.Success {
+			item.Failures++
+		}
+	}
+
+	items := make([]ErrorBreakdown, 0, len(counts))
+	for _, item := range counts {
+		items = append(items, item.ErrorBreakdown)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Failures == items[j].Failures {
+			if items[i].Calls == items[j].Calls {
+				if items[i].Category == items[j].Category {
+					if items[i].ErrorType == items[j].ErrorType {
+						return items[i].ErrorCode < items[j].ErrorCode
+					}
+					return items[i].ErrorType < items[j].ErrorType
+				}
+				return items[i].Category < items[j].Category
+			}
+			return items[i].Calls > items[j].Calls
+		}
+		return items[i].Failures > items[j].Failures
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
 func (s *MemoryStorage) topCounts(ctx context.Context, since time.Time, limit int, keyFn func(events.ToolEvent) string) ([]ToolCount, error) {
 	_ = ctx
 	s.mu.RLock()
@@ -293,4 +389,32 @@ func (s *MemoryStorage) topCounts(ctx context.Context, since time.Time, limit in
 		items = items[:limit]
 	}
 	return items, nil
+}
+
+func weekBucket(ts time.Time) string {
+	year, week := ts.UTC().ISOWeek()
+	return fmt.Sprintf("%04d-W%02d", year, week)
+}
+
+func classifyFailure(errorType, errorCode, errorMessage string) string {
+	joined := strings.ToLower(strings.TrimSpace(strings.Join([]string{errorType, errorCode, errorMessage}, " ")))
+	switch {
+	case containsAny(joined, []string{"validation", "invalid", "parameter", "bad request", "schema", "parse", "format"}):
+		return "parameter"
+	case containsAny(joined, []string{"permission", "forbidden", "unauthorized", "auth", "access denied"}):
+		return "permission"
+	case containsAny(joined, []string{"timeout", "deadline", "context canceled", "context deadline", "unavailable", "connection", "network"}):
+		return "context"
+	default:
+		return "other"
+	}
+}
+
+func containsAny(value string, tokens []string) bool {
+	for _, token := range tokens {
+		if strings.Contains(value, token) {
+			return true
+		}
+	}
+	return false
 }

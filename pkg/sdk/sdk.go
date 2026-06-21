@@ -37,12 +37,24 @@ func (s *SDK) Publish(event events.ToolEvent) {
 	s.Collector.Publish(event)
 }
 
+func (s *SDK) Close(timeout time.Duration) error {
+	return s.Collector.Close(timeout)
+}
+
 func (s *SDK) TopTools(ctx context.Context, since time.Time, limit int) ([]storage.ToolCount, error) {
 	return s.Engine.TopTools(ctx, since, limit)
 }
 
 func (s *SDK) MonthlyStats(ctx context.Context, since time.Time) ([]storage.MonthlyStat, error) {
 	return s.Engine.MonthlyStats(ctx, since)
+}
+
+func (s *SDK) WeeklyStats(ctx context.Context, since time.Time) ([]storage.WeeklyStat, error) {
+	return s.Engine.WeeklyStats(ctx, since)
+}
+
+func (s *SDK) ErrorBreakdowns(ctx context.Context, since time.Time, limit int) ([]storage.ErrorBreakdown, error) {
+	return s.Engine.ErrorBreakdowns(ctx, since, limit)
 }
 
 func (s *SDK) Status(ctx context.Context) (state.Status, error) {

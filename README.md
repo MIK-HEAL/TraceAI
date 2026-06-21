@@ -264,6 +264,11 @@ go build -o bin/toollens ./cmd/toollens
 {"store":"sqlite","db":"trace.db"}
 ```
 
+日志也支持环境变量和配置文件：
+
+- `TRACEAI_LOG_LEVEL=debug|info|warn|error`
+- `TRACEAI_LOG_FORMAT=text|json`
+
 ### 运行 CLI 分析
 
 ```bash
@@ -275,6 +280,9 @@ go build -o bin/toollens ./cmd/toollens
 
 # 查看哪个 Agent 调用最多
 ./bin/toollens --store sqlite --db trace.db top-agents
+
+# 查看版本
+./bin/toollens version
 
 # 查看总体统计
 ./bin/toollens --store sqlite --db trace.db stats
@@ -292,7 +300,7 @@ go build -o bin/toollens ./cmd/toollens
 ./bin/toollens --store sqlite --db trace.db health
 
 # 指标输出
-./bin/toollens --store sqlite --db trace.db metrics
+./bin/toollens --store sqlite --db trace.db metrics --format json
 
 # 显式写入演示数据
 ./bin/toollens --store sqlite --db trace.db seed-demo
@@ -302,6 +310,9 @@ go build -o bin/toollens ./cmd/toollens
 
 # 导出统计快照为 JSON
 ./bin/toollens --store sqlite --db trace.db export stats --format json --output stats.json
+
+# 导出周报快照
+./bin/toollens --store sqlite --db trace.db export weekly-stats --format csv --output weekly-stats.csv
 
 # 导出月报快照
 ./bin/toollens --store sqlite --db trace.db export monthly-stats --format json --output monthly-stats.json
@@ -391,6 +402,21 @@ top, _ := tsdk.TopTools(ctx, time.Time{}, 10)
 - [x] 更完整的分析报表
 - [x] Dashboard
 
+**Phase 3 已完成：**
+
+- [x] 补结构化日志
+- [x] 增加优雅关闭超时
+- [x] 收敛 Metrics 输出
+- [x] 补并发与边界测试
+- [x] 补 SQLite 独立集成测试
+- [x] 明确许可证
+- [x] 固化发布检查
+- [x] 增强报表维度
+- [x] 增加失败原因归因
+- [x] 增加月报 / 周报快照
+- [x] 扩展更多 Adapter 示例
+- [x] Web Dashboard 只读版
+
 ---
 
 ## 为什么是现在？
@@ -417,4 +443,4 @@ Trace 有三层含义：
 
 ## 许可证
 
-TBD
+MIT，见 [LICENSE](LICENSE)

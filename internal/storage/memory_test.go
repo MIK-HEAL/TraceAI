@@ -103,3 +103,63 @@ func TestMemoryStorageMonthlyStats(t *testing.T) {
 		t.Fatalf("unexpected monthly stats: %+v", rows)
 	}
 }
+
+func TestMemoryStorageWeeklyStats(t *testing.T) {
+	store := NewMemoryStorage()
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	event := events.NewToolEvent()
+	event.AdapterName = "mcp"
+	event.ToolType = "mcp"
+	event.ToolName = "search"
+	event.FunctionName = "tool_call"
+	event.Timestamp = time.Date(2026, 6, 21, 10, 0, 0, 0, time.UTC)
+	event.Success = true
+	if err := store.InsertEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := store.WeeklyStats(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 weekly stat row, got %d", len(rows))
+	}
+	if rows[0].StatWeek == "" {
+		t.Fatal("expected weekly bucket label")
+	}
+}
+
+func TestMemoryStorageErrorBreakdowns(t *testing.T) {
+	store := NewMemoryStorage()
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	event := events.NewToolEvent()
+	event.AdapterName = "mcp"
+	event.ToolType = "mcp"
+	event.ToolName = "search"
+	event.FunctionName = "tool_call"
+	event.Success = false
+	event.ErrorType = "validation_error"
+	event.ErrorCode = "bad_input"
+	event.ErrorMessage = "invalid parameter"
+	if err := store.InsertEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := store.ErrorBreakdowns(context.Background(), time.Time{}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 error breakdown row, got %d", len(rows))
+	}
+	if rows[0].Category != "parameter" {
+		t.Fatalf("expected parameter category, got %+v", rows[0])
+	}
+}

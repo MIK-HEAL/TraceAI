@@ -12,6 +12,8 @@ type Config struct {
 	Store      string
 	DB         string
 	ConfigPath string
+	LogLevel   string
+	LogFormat  string
 }
 
 func Load(fs *flag.FlagSet) *Config {
@@ -19,11 +21,15 @@ func Load(fs *flag.FlagSet) *Config {
 		Store:      envOrDefault("TRACEAI_STORE", "sqlite"),
 		DB:         envOrDefault("TRACEAI_DB", "toollens.db"),
 		ConfigPath: envOrDefault("TRACEAI_CONFIG", ""),
+		LogLevel:   envOrDefault("TRACEAI_LOG_LEVEL", "info"),
+		LogFormat:  envOrDefault("TRACEAI_LOG_FORMAT", "text"),
 	}
 	if fs != nil {
 		fs.StringVar(&cfg.Store, "store", cfg.Store, "storage backend: sqlite or memory")
 		fs.StringVar(&cfg.DB, "db", cfg.DB, "sqlite database path")
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "config file path")
+		fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level: debug, info, warn, error")
+		fs.StringVar(&cfg.LogFormat, "log-format", cfg.LogFormat, "log format: text or json")
 	}
 	return cfg
 }
@@ -51,6 +57,12 @@ func ApplyFile(fs *flag.FlagSet, cfg *Config) error {
 	}
 	if !visited["db"] && strings.TrimSpace(fileCfg.DB) != "" {
 		cfg.DB = fileCfg.DB
+	}
+	if !visited["log-level"] && strings.TrimSpace(fileCfg.LogLevel) != "" {
+		cfg.LogLevel = fileCfg.LogLevel
+	}
+	if !visited["log-format"] && strings.TrimSpace(fileCfg.LogFormat) != "" {
+		cfg.LogFormat = fileCfg.LogFormat
 	}
 	return nil
 }

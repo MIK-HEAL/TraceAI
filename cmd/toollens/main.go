@@ -8,7 +8,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,10 +19,13 @@ import (
 	"toollens/internal/config"
 	"toollens/internal/dashboard"
 	"toollens/internal/events"
+	"toollens/internal/logging"
 	"toollens/internal/storage"
 	"toollens/pkg/sdk"
 	"toollens/pkg/state"
 )
+
+var version = "dev"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout); err != nil {
@@ -36,12 +41,15 @@ func run(argv []string, out io.Writer) error {
 	if err := config.ApplyFile(fs, cfg); err != nil {
 		return wrapError("load config", err)
 	}
+	logging.Configure(cfg.LogLevel, cfg.LogFormat, os.Stderr)
 
 	args := fs.Args()
 	if len(args) < 1 {
 		printUsage(out)
 		return nil
 	}
+	slog.Default().With("component", "cli", "command", args[0]).Info("command start")
+	defer slog.Default().With("component", "cli", "command", args[0]).Info("command finish")
 
 	store, err := storage.New(storage.Config{Backend: cfg.Store, Path: cfg.DB})
 	if err != nil {
@@ -55,6 +63,8 @@ func run(argv []string, out io.Writer) error {
 	engine := analytics.NewEngine(store)
 
 	switch args[0] {
+	case "version":
+		return runVersion(out)
 	case "top-tools":
 		return runTopTools(engine, args[1:], out)
 	case "top-functions":
@@ -72,7 +82,7 @@ func run(argv []string, out io.Writer) error {
 	case "health":
 		return runHealth(sdk.New(store), out)
 	case "metrics":
-		return runMetrics(sdk.New(store), out)
+		return runMetrics(sdk.New(store), args[1:], out)
 	case "export":
 		return runExport(engine, args[1:], out)
 	case "seed-demo":
@@ -193,17 +203,36 @@ func runHealth(client *sdk.SDK, out io.Writer) error {
 	return err
 }
 
-func runMetrics(client *sdk.SDK, out io.Writer) error {
+func runVersion(out io.Writer) error {
+	_, err := fmt.Fprintln(out, version)
+	return err
+}
+
+func runMetrics(client *sdk.SDK, args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("metrics", flag.ExitOnError)
+	format := fs.String("format", "text", "output format: text or json")
+	_ = fs.Parse(args)
+
 	metrics, err := client.Metrics(context.Background())
 	if err != nil {
 		return wrapError("collect metrics", err)
 	}
-	for _, metric := range metrics {
-		if _, err := fmt.Fprintf(out, "%s=%v\n", metric.Name, metric.Value); err != nil {
-			return err
+	sort.Slice(metrics, func(i, j int) bool {
+		return metrics[i].Name < metrics[j].Name
+	})
+	switch strings.ToLower(strings.TrimSpace(*format)) {
+	case "json":
+		return writeJSON(out, metrics)
+	case "text":
+		for _, metric := range metrics {
+			if _, err := fmt.Fprintf(out, "%s=%v\n", metric.Name, metric.Value); err != nil {
+				return err
+			}
 		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported metrics format %q", *format)
 	}
-	return nil
 }
 
 func runReport(engine *analytics.Engine, args []string, out io.Writer) error {
@@ -283,6 +312,12 @@ func runExport(engine *analytics.Engine, args []string, out io.Writer) error {
 			return err
 		}
 		return writeDailyStatsExport(writer, *format, rows)
+	case "weekly-stats":
+		rows, err := engine.WeeklyStats(context.Background(), time.Time{})
+		if err != nil {
+			return err
+		}
+		return writeWeeklyStatsExport(writer, *format, rows)
 	case "monthly-stats":
 		rows, err := engine.MonthlyStats(context.Background(), time.Time{})
 		if err != nil {
@@ -464,6 +499,39 @@ func writeMonthlyStatsExport(w io.Writer, format string, rows []storage.MonthlyS
 	}
 }
 
+func writeWeeklyStatsExport(w io.Writer, format string, rows []storage.WeeklyStat) error {
+	switch format {
+	case "json":
+		payload := make([]exportWeeklyStatRow, 0, len(rows))
+		for _, row := range rows {
+			payload = append(payload, exportWeeklyStatRow{
+				StatWeek:        row.StatWeek,
+				Calls:           row.Calls,
+				Success:         row.Success,
+				TotalDurationMS: row.TotalDurationMS,
+				InputSize:       row.InputSize,
+				OutputSize:      row.OutputSize,
+			})
+		}
+		return writeJSON(w, payload)
+	case "csv":
+		records := make([][]string, 0, len(rows))
+		for _, row := range rows {
+			records = append(records, []string{
+				row.StatWeek,
+				strconv.FormatInt(row.Calls, 10),
+				strconv.FormatInt(row.Success, 10),
+				strconv.FormatInt(row.TotalDurationMS, 10),
+				strconv.FormatInt(row.InputSize, 10),
+				strconv.FormatInt(row.OutputSize, 10),
+			})
+		}
+		return writeCSV(w, []string{"stat_week", "calls", "success", "total_duration_ms", "input_size", "output_size"}, records)
+	default:
+		return fmt.Errorf("unsupported export format %q", format)
+	}
+}
+
 func writeCSV(w io.Writer, headers []string, records [][]string) error {
 	cw := csv.NewWriter(w)
 	if err := cw.Write(headers); err != nil {
@@ -521,15 +589,16 @@ ToolLens
 Usage:
   toollens [--store sqlite|memory] [--db path] top-tools
   toollens [--store sqlite|memory] [--db path] top-functions
-	toollens [--store sqlite|memory] [--db path] top-agents
-	toollens [--store sqlite|memory] [--db path] stats
+  toollens [--store sqlite|memory] [--db path] top-agents
+  toollens [--store sqlite|memory] [--db path] stats
+  toollens [--store sqlite|memory] [--db path] version
   toollens [--store sqlite|memory] [--db path] report [--limit n] [--catalog path|tool1,tool2] [--trend-days n]
   toollens [--store sqlite|memory] [--db path] dashboard [--addr :8080]
   toollens [--store sqlite|memory] [--db path] status
   toollens [--store sqlite|memory] [--db path] health
-  toollens [--store sqlite|memory] [--db path] metrics
+  toollens [--store sqlite|memory] [--db path] metrics [--format text|json]
   toollens [--store sqlite|memory] [--db path] seed-demo
-  toollens [--store sqlite|memory] [--db path] export <top-tools|top-functions|top-agents|stats|daily-stats|monthly-stats> [--format csv|json] [--output path]
+  toollens [--store sqlite|memory] [--db path] export <top-tools|top-functions|top-agents|stats|daily-stats|weekly-stats|monthly-stats> [--format csv|json] [--output path]
 `))
 }
 
@@ -570,6 +639,15 @@ type exportDailyStatRow struct {
 
 type exportMonthlyStatRow struct {
 	StatMonth       string `json:"stat_month"`
+	Calls           int64  `json:"calls"`
+	Success         int64  `json:"success"`
+	TotalDurationMS int64  `json:"total_duration_ms"`
+	InputSize       int64  `json:"input_size"`
+	OutputSize      int64  `json:"output_size"`
+}
+
+type exportWeeklyStatRow struct {
+	StatWeek        string `json:"stat_week"`
 	Calls           int64  `json:"calls"`
 	Success         int64  `json:"success"`
 	TotalDurationMS int64  `json:"total_duration_ms"`

@@ -47,12 +47,20 @@ func makeReport(ctx context.Context, engine *analytics.Engine, limit int, catalo
 
 	zeroCalls := zeroCallTools(tools, catalog)
 	behavior := summarizeBehavior(eventsRows)
+	breakdowns, err := engine.ErrorBreakdowns(ctx, time.Time{}, limit)
+	if err != nil {
+		return "", err
+	}
 
 	if trendDays <= 0 {
 		trendDays = 7
 	}
 	since := time.Now().UTC().AddDate(0, 0, -(trendDays - 1))
 	trendRows, err := engine.DailyStats(ctx, since)
+	if err != nil {
+		return "", err
+	}
+	weeklyRows, err := engine.WeeklyStats(ctx, time.Time{})
 	if err != nil {
 		return "", err
 	}
@@ -90,6 +98,15 @@ func makeReport(ctx context.Context, engine *analytics.Engine, limit int, catalo
 	appendSection(&b, "Behavior Profile")
 	appendLine(&b, fmt.Sprintf("%s read=%d write=%d other=%d total=%d", behavior.Label, behavior.Read, behavior.Write, behavior.Other, behavior.Total))
 
+	appendSection(&b, "Failure Reasons")
+	if len(breakdowns) == 0 {
+		appendLine(&b, "none")
+	} else {
+		for _, row := range breakdowns {
+			appendLine(&b, fmt.Sprintf("%-12s %-16s %-12s calls=%-4d failures=%-4d", row.Category, blankOrDash(row.ErrorType), blankOrDash(row.ErrorCode), row.Calls, row.Failures))
+		}
+	}
+
 	appendSection(&b, "Agent Usage")
 	if len(agents) == 0 {
 		appendLine(&b, "none")
@@ -110,6 +127,15 @@ func makeReport(ctx context.Context, engine *analytics.Engine, limit int, catalo
 			first := trendRows[0]
 			last := trendRows[len(trendRows)-1]
 			appendLine(&b, fmt.Sprintf("delta calls=%d success=%d input=%d output=%d", last.Calls-first.Calls, last.Success-first.Success, last.InputSize-first.InputSize, last.OutputSize-first.OutputSize))
+		}
+	}
+
+	appendSection(&b, "Weekly Snapshot")
+	if len(weeklyRows) == 0 {
+		appendLine(&b, "none")
+	} else {
+		for _, row := range weeklyRows {
+			appendLine(&b, fmt.Sprintf("%s calls=%d success=%d", row.StatWeek, row.Calls, row.Success))
 		}
 	}
 
@@ -134,6 +160,13 @@ func appendSection(b *strings.Builder, title string) {
 func appendLine(b *strings.Builder, line string) {
 	b.WriteString(line)
 	b.WriteString("\n")
+}
+
+func blankOrDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return value
 }
 
 func zeroCallTools(actual []storage.ToolCount, catalog []string) []string {

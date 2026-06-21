@@ -215,6 +215,27 @@ func TestExportMonthlyStatsJSON(t *testing.T) {
 	}
 }
 
+func TestExportWeeklyStatsCSV(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "weekly.db")
+	csvPath := filepath.Join(tmpDir, "weekly.csv")
+	var stdout bytes.Buffer
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "seed-demo"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "export", "weekly-stats", "--format", "csv", "--output", csvPath}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(csvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "stat_week,calls,success") {
+		t.Fatalf("unexpected weekly export: %s", content)
+	}
+}
+
 func TestReportCommandOutputsSections(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "report.db")
@@ -250,6 +271,10 @@ func TestReportCommandOutputsSections(t *testing.T) {
 		event.FunctionName = row.fnName
 		event.Success = row.success
 		event.ErrorMessage = row.message
+		if i == 0 {
+			event.ErrorType = "permission_error"
+			event.ErrorCode = "forbidden"
+		}
 		event.DurationMS = int64(100 + i*10)
 		if err := store.InsertEvent(context.Background(), event); err != nil {
 			t.Fatal(err)
@@ -280,6 +305,9 @@ func TestReportCommandOutputsSections(t *testing.T) {
 	if !strings.Contains(content, "Behavior Profile") {
 		t.Fatalf("expected behavior profile section, got: %s", content)
 	}
+	if !strings.Contains(content, "Failure Reasons") {
+		t.Fatalf("expected failure reasons section, got: %s", content)
+	}
 	if !strings.Contains(content, "Trend") {
 		t.Fatalf("expected trend section, got: %s", content)
 	}
@@ -294,6 +322,33 @@ func TestReportCommandOutputsSections(t *testing.T) {
 	}
 	if !strings.Contains(content, "read-heavy") && !strings.Contains(content, "balanced") {
 		t.Fatalf("expected behavior profile output, got: %s", content)
+	}
+}
+
+func TestVersionCommandOutputsVersion(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := run([]string{"--store", "memory", "version"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(stdout.String()) == "" {
+		t.Fatal("expected version output")
+	}
+}
+
+func TestMetricsJSONFormat(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "metrics-json.db")
+	var stdout bytes.Buffer
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "seed-demo"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	if err := run([]string{"--store", "sqlite", "--db", dbPath, "metrics", "--format", "json"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "\"name\"") {
+		t.Fatalf("expected json metrics output, got: %s", stdout.String())
 	}
 }
 

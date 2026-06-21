@@ -23,7 +23,9 @@ func TestEndToEndSmoke(t *testing.T) {
 	client.Publish(buildEvent("openai", "chat.completions", "function_call", "demo-agent", true, 210, 256, 512))
 
 	waitForEvents(t, store, 2)
-	client.Collector.Bus.Close()
+	if err := client.Close(2 * time.Second); err != nil {
+		t.Fatal(err)
+	}
 	waitForEvents(t, store, 2)
 
 	eventsRows, err := store.ListEvents(context.Background(), 10)

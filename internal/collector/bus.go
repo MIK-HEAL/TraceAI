@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -25,6 +26,8 @@ type Bus struct {
 	mu         sync.Mutex
 	lastErr    error
 	maxRetries int
+	runCtx     context.Context
+	cancel     context.CancelFunc
 }
 
 func NewBus(storage storage.Storage, batchSize int, flushEvery time.Duration) *Bus {
@@ -46,6 +49,16 @@ func NewBus(storage storage.Storage, batchSize int, flushEvery time.Duration) *B
 }
 
 func (b *Bus) Start(ctx context.Context) error {
+	b.publishMu.Lock()
+	if b.runCtx != nil {
+		b.publishMu.Unlock()
+		return errors.New("bus already started")
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	b.runCtx = runCtx
+	b.cancel = cancel
+	b.publishMu.Unlock()
+
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
@@ -57,7 +70,7 @@ func (b *Bus) Start(ctx context.Context) error {
 				return
 			}
 			for _, event := range batch {
-				if err := b.insertWithRetry(ctx, event); err != nil {
+				if err := b.insertWithRetry(runCtx, event); err != nil {
 					b.reportError(err)
 				}
 			}
@@ -65,9 +78,10 @@ func (b *Bus) Start(ctx context.Context) error {
 		}
 		for {
 			select {
-			case <-ctx.Done():
+			case <-runCtx.Done():
 				flush()
 				b.once.Do(func() { close(b.done) })
+				slog.Default().With("component", "collector").Info("collector stopped", "reason", "context_done")
 				return
 			case event, ok := <-b.input:
 				if !ok {
@@ -91,6 +105,7 @@ func (b *Bus) Publish(event events.ToolEvent) {
 	b.publishMu.Lock()
 	defer b.publishMu.Unlock()
 	if b.closed {
+		slog.Default().With("component", "collector").Warn("event dropped", "reason", "bus_closed", "event_id", event.EventID)
 		b.reportError(errors.New("bus is closed"))
 		return
 	}
@@ -100,6 +115,7 @@ func (b *Bus) Publish(event events.ToolEvent) {
 		select {
 		case b.input <- event:
 		default:
+			slog.Default().With("component", "collector").Warn("event dropped", "reason", "queue_full", "event_id", event.EventID, "queue_len", len(b.input), "queue_cap", cap(b.input))
 			b.reportError(errors.New("event dropped: bus queue full"))
 		}
 	}
@@ -126,14 +142,39 @@ func (b *Bus) LastError() error {
 }
 
 func (b *Bus) Close() {
+	_ = b.CloseWithTimeout(5 * time.Second)
+}
+
+func (b *Bus) CloseWithTimeout(timeout time.Duration) error {
 	b.publishMu.Lock()
+	if b.runCtx == nil {
+		b.closed = true
+		b.publishMu.Unlock()
+		return nil
+	}
 	if !b.closed {
 		b.closed = true
 		close(b.input)
 	}
 	b.publishMu.Unlock()
-	b.once.Do(func() { close(b.done) })
-	b.wg.Wait()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-b.done:
+		slog.Default().With("component", "collector").Info("collector closed")
+		return nil
+	case <-timer.C:
+		if b.cancel != nil {
+			b.cancel()
+		}
+		err := fmt.Errorf("collector close timed out after %s", timeout)
+		b.reportError(err)
+		slog.Default().With("component", "collector").Error("collector close timeout", "timeout", timeout, "error", err)
+		return err
+	}
 }
 
 func (b *Bus) insertWithRetry(ctx context.Context, event events.ToolEvent) error {
@@ -155,6 +196,7 @@ func (b *Bus) reportError(err error) {
 	b.mu.Lock()
 	b.lastErr = err
 	b.mu.Unlock()
+	slog.Default().With("component", "collector").Error("collector error", "error", err)
 	select {
 	case b.errs <- err:
 	default:

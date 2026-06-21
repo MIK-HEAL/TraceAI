@@ -20,6 +20,8 @@ type Storage interface {
 	Stats(ctx context.Context, since time.Time) (Stats, error)
 	DailyStats(ctx context.Context, since time.Time) ([]DailyStat, error)
 	MonthlyStats(ctx context.Context, since time.Time) ([]MonthlyStat, error)
+	WeeklyStats(ctx context.Context, since time.Time) ([]WeeklyStat, error)
+	ErrorBreakdowns(ctx context.Context, since time.Time, limit int) ([]ErrorBreakdown, error)
 }
 
 type ToolCount struct {
@@ -77,4 +79,21 @@ type MonthlyStat struct {
 	TotalDurationMS int64
 	InputSize       int64
 	OutputSize      int64
+}
+
+type WeeklyStat struct {
+	StatWeek        string
+	Calls           int64
+	Success         int64
+	TotalDurationMS int64
+	InputSize       int64
+	OutputSize      int64
+}
+
+type ErrorBreakdown struct {
+	ErrorType string
+	ErrorCode string
+	Category  string
+	Calls     int64
+	Failures  int64
 }

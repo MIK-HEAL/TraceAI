@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -13,6 +15,7 @@ import (
 )
 
 type SQLiteStorage struct {
+	mu   sync.Mutex
 	path string
 	db   *sql.DB
 }
@@ -25,39 +28,68 @@ func NewSQLiteStorage(path string) *SQLiteStorage {
 }
 
 func (s *SQLiteStorage) Init(ctx context.Context) error {
+	logger := slog.Default().With("component", "storage", "backend", "sqlite")
 	db, err := sql.Open("sqlite", s.path)
 	if err != nil {
+		logger.Error("storage init failed", "error", err)
 		return err
 	}
 	db.SetMaxOpenConns(1)
 	if err := s.migrate(ctx, db); err != nil {
 		_ = db.Close()
+		logger.Error("storage migration failed", "error", err)
 		return err
 	}
+	s.mu.Lock()
 	s.db = db
+	s.mu.Unlock()
+	logger.Info("storage initialized", "path", s.path)
 	return nil
 }
 
 func (s *SQLiteStorage) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.db == nil {
 		return nil
 	}
-	return s.db.Close()
+	err := s.db.Close()
+	if err != nil {
+		slog.Default().With("component", "storage", "backend", "sqlite").Error("storage close failed", "error", err)
+		return err
+	}
+	s.db = nil
+	slog.Default().With("component", "storage", "backend", "sqlite").Info("storage closed")
+	return nil
 }
 
 func (s *SQLiteStorage) Ping(ctx context.Context) error {
-	if s.db == nil {
+	s.mu.Lock()
+	db := s.db
+	s.mu.Unlock()
+	if db == nil {
+		slog.Default().With("component", "storage", "backend", "sqlite").Warn("storage ping failed", "reason", "not_initialized")
 		return fmt.Errorf("storage not initialized")
 	}
-	return s.db.PingContext(ctx)
+	return db.PingContext(ctx)
 }
 
 func (s *SQLiteStorage) InsertEvent(ctx context.Context, event events.ToolEvent) error {
 	if err := event.Validate(); err != nil {
+		slog.Default().With("component", "storage", "backend", "sqlite").Error("insert event failed", "event_id", event.EventID, "error", err)
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	s.mu.Lock()
+	db := s.db
+	s.mu.Unlock()
+	if db == nil {
+		err := fmt.Errorf("storage not initialized")
+		slog.Default().With("component", "storage", "backend", "sqlite").Error("insert event failed", "event_id", event.EventID, "error", err)
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
+		slog.Default().With("component", "storage", "backend", "sqlite").Error("insert event failed", "event_id", event.EventID, "error", err)
 		return err
 	}
 	defer tx.Rollback()
@@ -73,6 +105,7 @@ func (s *SQLiteStorage) InsertEvent(ctx context.Context, event events.ToolEvent)
 		event.AgentName, event.AgentVersion, event.AdapterName, event.AdapterVersion,
 		event.ToolType, event.ToolName, event.FunctionName, boolToInt(event.Success), event.DurationMS,
 		event.InputSize, event.OutputSize, event.RetryCount, event.ErrorType, event.ErrorCode, event.ErrorMessage, mustJSON(event.Metadata)); err != nil {
+		slog.Default().With("component", "storage", "backend", "sqlite").Error("insert event failed", "event_id", event.EventID, "error", err)
 		return err
 	}
 
@@ -83,6 +116,7 @@ func (s *SQLiteStorage) InsertEvent(ctx context.Context, event events.ToolEvent)
 			last_seen = excluded.last_seen,
 			call_count = call_count + 1
 	`, event.SessionID, event.AgentName, event.AdapterName, event.Timestamp.UTC().Format(time.RFC3339Nano), event.Timestamp.UTC().Format(time.RFC3339Nano)); err != nil {
+		slog.Default().With("component", "storage", "backend", "sqlite").Error("insert event failed", "event_id", event.EventID, "error", err)
 		return err
 	}
 
@@ -98,6 +132,7 @@ func (s *SQLiteStorage) InsertEvent(ctx context.Context, event events.ToolEvent)
 			output_size = output_size + excluded.output_size,
 			last_seen = excluded.last_seen
 	`, event.AgentName, event.AgentVersion, boolToInt(event.Success), event.DurationMS, event.InputSize, event.OutputSize, event.Timestamp.UTC().Format(time.RFC3339Nano)); err != nil {
+		slog.Default().With("component", "storage", "backend", "sqlite").Error("insert event failed", "event_id", event.EventID, "error", err)
 		return err
 	}
 
@@ -113,6 +148,7 @@ func (s *SQLiteStorage) InsertEvent(ctx context.Context, event events.ToolEvent)
 			output_size = output_size + excluded.output_size,
 			last_seen = excluded.last_seen
 	`, event.ToolName, event.ToolType, boolToInt(event.Success), event.DurationMS, event.InputSize, event.OutputSize, event.Timestamp.UTC().Format(time.RFC3339Nano)); err != nil {
+		slog.Default().With("component", "storage", "backend", "sqlite").Error("insert event failed", "event_id", event.EventID, "error", err)
 		return err
 	}
 
@@ -127,6 +163,7 @@ func (s *SQLiteStorage) InsertEvent(ctx context.Context, event events.ToolEvent)
 			input_size = input_size + excluded.input_size,
 			output_size = output_size + excluded.output_size
 	`, day, boolToInt(event.Success), event.DurationMS, event.InputSize, event.OutputSize); err != nil {
+		slog.Default().With("component", "storage", "backend", "sqlite").Error("insert event failed", "event_id", event.EventID, "error", err)
 		return err
 	}
 
@@ -318,6 +355,75 @@ func (s *SQLiteStorage) MonthlyStats(ctx context.Context, since time.Time) ([]Mo
 		if err := rows.Scan(&item.StatMonth, &item.Calls, &item.Success, &item.TotalDurationMS, &item.InputSize, &item.OutputSize); err != nil {
 			return nil, err
 		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStorage) WeeklyStats(ctx context.Context, since time.Time) ([]WeeklyStat, error) {
+	where, args := sinceClause(since)
+	query := fmt.Sprintf(`
+		SELECT strftime('%%Y-W%%W', timestamp) AS stat_week,
+			COUNT(*) AS calls,
+			COALESCE(SUM(success), 0) AS success_count,
+			COALESCE(SUM(duration_ms), 0) AS total_duration_ms,
+			COALESCE(SUM(input_size), 0) AS input_size,
+			COALESCE(SUM(output_size), 0) AS output_size
+		FROM events %s
+		GROUP BY stat_week
+		ORDER BY stat_week ASC
+	`, where)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []WeeklyStat
+	for rows.Next() {
+		var item WeeklyStat
+		if err := rows.Scan(&item.StatWeek, &item.Calls, &item.Success, &item.TotalDurationMS, &item.InputSize, &item.OutputSize); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStorage) ErrorBreakdowns(ctx context.Context, since time.Time, limit int) ([]ErrorBreakdown, error) {
+	where, args := sinceClause(since)
+	limitClause := ""
+	if limit > 0 {
+		limitClause = "LIMIT ?"
+		args = append(args, limit)
+	}
+	failureClause := "(success = 0 OR error_type != '' OR error_code != '' OR error_message != '')"
+	combinedWhere := "WHERE " + failureClause
+	if where != "" {
+		combinedWhere = where + " AND " + failureClause
+	}
+	query := fmt.Sprintf(`
+		SELECT error_type, error_code,
+			COUNT(*) AS calls,
+			COUNT(*) - COALESCE(SUM(success), 0) AS failures
+		FROM events %s
+		GROUP BY error_type, error_code
+		ORDER BY failures DESC, calls DESC, error_type ASC, error_code ASC
+		%s
+	`, combinedWhere, limitClause)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ErrorBreakdown
+	for rows.Next() {
+		var item ErrorBreakdown
+		if err := rows.Scan(&item.ErrorType, &item.ErrorCode, &item.Calls, &item.Failures); err != nil {
+			return nil, err
+		}
+		item.Category = classifyFailure(item.ErrorType, item.ErrorCode, "")
 		out = append(out, item)
 	}
 	return out, rows.Err()

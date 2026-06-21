@@ -285,6 +285,11 @@ func (d *Dashboard) errors(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, err)
 		return
 	}
+	breakdowns, err := d.engine.ErrorBreakdowns(ctx, time.Time{}, 20)
+	if err != nil {
+		writeServerError(w, err)
+		return
+	}
 	eventsRows, err := d.engine.Store.ListEvents(ctx, maxInt())
 	if err != nil {
 		writeServerError(w, err)
@@ -294,6 +299,7 @@ func (d *Dashboard) errors(w http.ResponseWriter, r *http.Request) {
 	body := buildPageBody("Errors", "Failure analysis and recent failing calls.", []string{"<a href=\"/\">Overview</a>", "<a href=\"/tools\">Tools</a>", "<a href=\"/agents\">Agents</a>"},
 		nil,
 		section("Failure Rank", renderFailureTable(failures)),
+		section("Failure Reasons", renderBreakdownTable(breakdowns)),
 		section("Recent Failures", renderEventTable(recentFailures)),
 	)
 	renderPage(w, "Errors", body)
@@ -395,6 +401,37 @@ func renderFailureTable(rows []storage.ToolFailureRate) string {
 		b.WriteString(fmt.Sprintf("%d", row.Failures))
 		b.WriteString("</td><td>")
 		b.WriteString(fmt.Sprintf("%.1f%%", row.FailureRate*100))
+		b.WriteString("</td></tr>")
+	}
+	b.WriteString("</tbody></table>")
+	return b.String()
+}
+
+func renderBreakdownTable(rows []storage.ErrorBreakdown) string {
+	if len(rows) == 0 {
+		return `<p class="muted">No error breakdown yet.</p>`
+	}
+	var b strings.Builder
+	b.WriteString("<table><thead><tr><th>Category</th><th>Type</th><th>Code</th><th>Calls</th><th>Failures</th></tr></thead><tbody>")
+	for _, row := range rows {
+		b.WriteString("<tr><td>")
+		b.WriteString(html.EscapeString(row.Category))
+		b.WriteString("</td><td>")
+		if row.ErrorType == "" {
+			b.WriteString("-")
+		} else {
+			b.WriteString(html.EscapeString(row.ErrorType))
+		}
+		b.WriteString("</td><td>")
+		if row.ErrorCode == "" {
+			b.WriteString("-")
+		} else {
+			b.WriteString(html.EscapeString(row.ErrorCode))
+		}
+		b.WriteString("</td><td>")
+		b.WriteString(fmt.Sprintf("%d", row.Calls))
+		b.WriteString("</td><td>")
+		b.WriteString(fmt.Sprintf("%d", row.Failures))
 		b.WriteString("</td></tr>")
 	}
 	b.WriteString("</tbody></table>")

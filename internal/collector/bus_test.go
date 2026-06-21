@@ -42,6 +42,12 @@ func (s *retryStorage) DailyStats(ctx context.Context, since time.Time) ([]stora
 func (s *retryStorage) MonthlyStats(ctx context.Context, since time.Time) ([]storage.MonthlyStat, error) {
 	return nil, nil
 }
+func (s *retryStorage) WeeklyStats(ctx context.Context, since time.Time) ([]storage.WeeklyStat, error) {
+	return nil, nil
+}
+func (s *retryStorage) ErrorBreakdowns(ctx context.Context, since time.Time, limit int) ([]storage.ErrorBreakdown, error) {
+	return nil, nil
+}
 func (s *retryStorage) InsertEvent(ctx context.Context, event events.ToolEvent) error {
 	s.calls++
 	if s.calls <= s.failures {
@@ -143,4 +149,66 @@ func TestBusCloseIsIdempotent(t *testing.T) {
 
 	bus.Close()
 	bus.Close()
+}
+
+type blockingStorage struct{}
+
+func (s *blockingStorage) Init(ctx context.Context) error { return nil }
+func (s *blockingStorage) Close() error                   { return nil }
+func (s *blockingStorage) Ping(ctx context.Context) error { return nil }
+func (s *blockingStorage) ListEvents(ctx context.Context, limit int) ([]events.ToolEvent, error) {
+	return nil, nil
+}
+func (s *blockingStorage) TopTools(ctx context.Context, since time.Time, limit int) ([]storage.ToolCount, error) {
+	return nil, nil
+}
+func (s *blockingStorage) TopFunctions(ctx context.Context, since time.Time, limit int) ([]storage.FunctionCount, error) {
+	return nil, nil
+}
+func (s *blockingStorage) TopAgents(ctx context.Context, since time.Time, limit int) ([]storage.AgentCount, error) {
+	return nil, nil
+}
+func (s *blockingStorage) ToolFailureRates(ctx context.Context, since time.Time, limit int) ([]storage.ToolFailureRate, error) {
+	return nil, nil
+}
+func (s *blockingStorage) Stats(ctx context.Context, since time.Time) (storage.Stats, error) {
+	return storage.Stats{}, nil
+}
+func (s *blockingStorage) DailyStats(ctx context.Context, since time.Time) ([]storage.DailyStat, error) {
+	return nil, nil
+}
+func (s *blockingStorage) MonthlyStats(ctx context.Context, since time.Time) ([]storage.MonthlyStat, error) {
+	return nil, nil
+}
+func (s *blockingStorage) WeeklyStats(ctx context.Context, since time.Time) ([]storage.WeeklyStat, error) {
+	return nil, nil
+}
+func (s *blockingStorage) ErrorBreakdowns(ctx context.Context, since time.Time, limit int) ([]storage.ErrorBreakdown, error) {
+	return nil, nil
+}
+func (s *blockingStorage) InsertEvent(ctx context.Context, event events.ToolEvent) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestBusCloseWithTimeout(t *testing.T) {
+	store := &blockingStorage{}
+	bus := NewBus(store, 1, time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := bus.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	event := events.NewToolEvent()
+	event.AdapterName = "mcp"
+	event.ToolType = "mcp"
+	event.ToolName = "search"
+	event.FunctionName = "tool_call"
+	bus.Publish(event)
+
+	err := bus.CloseWithTimeout(20 * time.Millisecond)
+	if err == nil {
+		t.Fatal("expected close timeout error")
+	}
 }
