@@ -1,4 +1,6 @@
 .gocache/
+.gomodcache/
+.gopath/
 .tmp/
 .modcache/
 bin/
@@ -6,3 +8,4 @@ design/
 task/
 toollens.exe
 traceai.exe
+traceai.db

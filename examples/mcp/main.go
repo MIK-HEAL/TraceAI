@@ -5,42 +5,31 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/MIK-HEAL/TraceAI/internal/adapters"
-	"github.com/MIK-HEAL/TraceAI/internal/storage"
-	"github.com/MIK-HEAL/TraceAI/pkg/sdk"
+	"github.com/MIK-HEAL/TraceAI/pkg/traceai"
 )
 
 func main() {
 	ctx := context.Background()
-
-	store := storage.NewMemoryStorage()
-	client := sdk.New(store)
+	client := traceai.New(traceai.NewMemoryStore())
 	if err := client.Start(ctx); err != nil {
 		panic(err)
 	}
+	defer func() { _ = client.Close(5 * time.Second) }()
 
-	adapter := adapters.NewMCPAdapter("0.1.0")
-	adapter.EmitCall("claude-code", "github", "search_code", true, 245, 1024, 8192, nil)
-	client.Publish(<-adapter.Events())
-
-	waitForStoredEvents(ctx, store, 1)
-
-	rows, err := client.TopTools(ctx, time.Time{}, 10)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("top tools: %+v\n", rows)
-
-	client.Collector.Bus.Close()
-}
-
-func waitForStoredEvents(ctx context.Context, store storage.Storage, expected int) {
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		rows, err := store.ListEvents(ctx, 10)
-		if err == nil && len(rows) >= expected {
-			return
+	if err := traceai.WrapMCP(client, traceai.CallInfo{
+		AdapterName:  "mcp",
+		AgentName:    "claude-code",
+		ToolType:     "mcp",
+		ToolName:     "github",
+		FunctionName: "search_code",
+	}, func(context.Context) error {
+		rows, err := client.TopTools(ctx, time.Time{}, 10)
+		if err != nil {
+			return err
 		}
-		time.Sleep(20 * time.Millisecond)
+		fmt.Printf("mcp top tools: %+v\n", rows)
+		return nil
+	})(ctx); err != nil {
+		panic(err)
 	}
 }

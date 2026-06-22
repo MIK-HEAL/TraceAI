@@ -17,20 +17,20 @@ func main() {
 	defer func() { _ = client.Close(5 * time.Second) }()
 
 	if err := traceai.CaptureRPC(ctx, client, traceai.CallInfo{
-		AdapterName:  "openai",
-		AgentName:    "cursor",
-		ToolType:     "openai",
-		ToolName:     "chat.completions",
-		FunctionName: "function_call",
+		AdapterName:  "grpc",
+		AgentName:    "claude-code",
+		ToolType:     "grpc",
+		ToolName:     "repo",
+		FunctionName: "ListFiles",
 	}, func(context.Context) (int64, int64, error) {
-		return 256, 512, nil
+		return 4096, 8192, nil
 	}); err != nil {
 		panic(err)
 	}
 
-	stats, err := client.Stats(ctx, time.Time{})
+	rows, err := client.TopFunctions(ctx, time.Time{}, 10)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("stats: %+v\n", stats)
+	fmt.Printf("grpc top functions: %+v\n", rows)
 }

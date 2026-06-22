@@ -2,6 +2,8 @@ package models
 
 import "time"
 
+const SchemaVersion = "v1"
+
 type ToolEvent struct {
 	EventID        string                 `json:"event_id"`
 	SchemaVersion  string                 `json:"schema_version"`
@@ -57,4 +59,61 @@ type Stats struct {
 	AvgLatency  float64
 	InputSize   int64
 	OutputSize  int64
+}
+
+type DailyStat struct {
+	StatDay         string
+	Calls           int64
+	Success         int64
+	TotalDurationMS int64
+	InputSize       int64
+	OutputSize      int64
+}
+
+type MonthlyStat struct {
+	StatMonth       string
+	Calls           int64
+	Success         int64
+	TotalDurationMS int64
+	InputSize       int64
+	OutputSize      int64
+}
+
+type WeeklyStat struct {
+	StatWeek        string
+	Calls           int64
+	Success         int64
+	TotalDurationMS int64
+	InputSize       int64
+	OutputSize      int64
+}
+
+type ErrorBreakdown struct {
+	ErrorType string
+	ErrorCode string
+	Category  string
+	Calls     int64
+	Failures  int64
+}
+
+func (e ToolEvent) Clone() ToolEvent {
+	clone := e
+	if e.Metadata != nil {
+		clone.Metadata = make(map[string]interface{}, len(e.Metadata))
+		for k, v := range e.Metadata {
+			clone.Metadata[k] = v
+		}
+	}
+	return clone
+}
+
+func (e ToolEvent) Normalize() ToolEvent {
+	clone := e.Clone()
+	if clone.SchemaVersion == "" {
+		clone.SchemaVersion = SchemaVersion
+	}
+	if clone.Metadata == nil {
+		clone.Metadata = map[string]interface{}{}
+	}
+	return clone
 }

@@ -344,27 +344,66 @@ go build -ldflags "-X main.version=v0.1.0 -X main.buildCommit=git-sha -X main.bu
 
 Windows 下把 `./bin/traceai` 换成 `.\\bin\\traceai.exe` 即可。
 
-### 集成 SDK
+### 集成 TraceAI
+
+推荐直接使用 `pkg/traceai` 的轻量入口：
 
 ```go
-import "github.com/MIK-HEAL/TraceAI/pkg/sdk"
+import (
+    "context"
+    "net/http"
+    "time"
 
-store, _ := storage.New(storage.Config{Backend: "sqlite", Path: "trace.db"})
-tsdk := sdk.New(store)
-tsdk.Start(ctx)
+    "github.com/MIK-HEAL/TraceAI/pkg/traceai"
+)
 
-// 记录一次 MCP 工具调用
-tsdk.Publish(events.ToolEvent{
-    ToolName:     "github",
-    FunctionName: "search_code",
-    Success:      true,
-    DurationMS:   245,
-    // ...
-})
+func main() {
+    ctx := context.Background()
+    client := traceai.New(traceai.NewMemoryStore())
+    if err := client.Start(ctx); err != nil {
+        panic(err)
+    }
+    defer func() { _ = client.Close(5 * time.Second) }()
 
-// 查询分析结果
-top, _ := tsdk.TopTools(ctx, time.Time{}, 10)
+    _ = traceai.CaptureRPC(ctx, client, traceai.CallInfo{
+        AdapterName:  "mcp",
+        AgentName:    "claude-code",
+        ToolType:     "mcp",
+        ToolName:     "github",
+        FunctionName: "search_code",
+    }, func(context.Context) (int64, int64, error) {
+        return 1024, 4096, nil
+    })
+
+    handler := traceai.HTTPMiddleware(client, traceai.CallInfo{
+        AdapterName:  "http",
+        AgentName:    "demo-agent",
+        ToolType:     "http",
+        ToolName:     "health",
+        FunctionName: "GET /health",
+    })(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        w.WriteHeader(http.StatusOK)
+    }))
+    _ = handler
+}
 ```
+
+`traceai` 还提供：
+
+- `RecordStart` / `RecordFinish`：手工埋点的轻量辅助
+- `HTTPMiddleware`：包装 `net/http`
+- `CaptureRPC`：包装 RPC 风格调用
+- `UnaryServerInterceptor` / `StreamServerInterceptor`：gRPC 拦截器
+- `WrapMCP`：包装 MCP handler
+- `SemanticFields()`：查看稳定语义字段
+- `NewLocalExporter()` / `NewOTLPExporter()`：选择导出模式
+
+### 你会看到什么效果
+
+- `traceai health` 能确认数据库和运行状态正常
+- `traceai report` 会出现工具热力图、失败率和 Agent 使用情况
+- `traceai export` 能把结果导成 CSV / JSON
+- 你可以从“AI 调了多少次工具”进一步看到“它到底用了哪些功能”
 
 ### 文档入口
 
@@ -378,6 +417,8 @@ top, _ := tsdk.TopTools(ctx, time.Time{}, 10)
 
 ### 真实接入示例
 
+- [HTTP 示例](examples/http/main.go)
+- [gRPC 示例](examples/grpc/main.go)
 - [MCP 示例](examples/mcp/main.go)
 - [OpenAI 示例](examples/openai/main.go)
 
@@ -442,6 +483,17 @@ top, _ := tsdk.TopTools(ctx, time.Time{}, 10)
 - [x] 增加月报 / 周报快照
 - [x] 扩展更多 Adapter 示例
 - [x] Web Dashboard 只读版
+
+**Phase 4 已完成：**
+
+- [x] 自动拦截架构
+- [x] TraceAI 语义规范
+- [x] 零代码接入示例
+- [x] OTLP 导出结构
+- [x] 导出适配层
+- [x] 接入边界测试
+- [x] 文档与安装页
+- [x] 真实框架接入示例
 
 ---
 

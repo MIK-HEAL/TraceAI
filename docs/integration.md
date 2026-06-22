@@ -1,41 +1,58 @@
 # TraceAI 接入说明
 
-## 事件模型
+## 推荐入口
 
-所有 adapter 都需要产出统一的 `ToolEvent`。
+优先使用 `pkg/traceai`：
 
-最少字段要求：
+- `traceai.New(traceai.NewMemoryStore())`
+- `traceai.Interceptor`
+- `traceai.SemanticFields()`
+- `traceai.NewLocalExporter()`
+- `traceai.NewOTLPExporter()`
 
-- `event_id`
-- `schema_version`
-- `trace_id`
-- `session_id`
-- `timestamp`
-- `adapter_name`
-- `tool_type`
-- `tool_name`
-- `function_name`
-- `success`
-- `duration_ms`
-- `input_size`
-- `output_size`
+## 最小流程
 
-## 统计口径
+1. 初始化 `Client`
+2. `Start(ctx)` 启动存储
+3. 用 `Interceptor` 包装 HTTP / gRPC / MCP 调用
+4. 通过 `Publish(...)` 或自动拦截写入事件
+5. 用 `TopTools / Stats / DailyStats / ErrorBreakdowns` 查询结果
+6. `Close(timeout)` 收尾
 
-- `calls` 统计事件条数。
-- `success_rate` = 成功事件数 / 总事件数。
-- `latency` 使用 `duration_ms` 的平均值。
-- `input_size` / `output_size` 单位为字节。
-- `retry_count` 表示同一次逻辑调用里的重试次数。
+## 语义字段
 
-## Adapter 接入流程
+TraceAI 统一使用这些字段：
 
-1. 在调用开始时生成一个 `ToolEvent`。
-2. 填充 adapter / agent / tool / function 等元数据。
-3. 调用结束后回填 `success`、`duration_ms`、`input_size`、`output_size`。
-4. 出错时补充 `error_type` 和 `error_message`。
-5. 将事件写入事件总线或直接写入存储层。
+- `traceai.tool.name`
+- `traceai.tool.type`
+- `traceai.tool.success`
+- `traceai.tool.duration_ms`
+- `traceai.agent.name`
+- `traceai.error.code`
+- `traceai.error.type`
+
+## 自动拦截
+
+### HTTP
+
+使用 `WrapHTTP` 包装 `http.Handler`。
+
+### gRPC
+
+使用 `CaptureRPC` 包装一次 RPC 调用。
+
+### MCP
+
+使用 `WrapMCP` 包装 tool handler。
+
+## 导出
+
+- `LocalExporter` 输出 JSONL 到系统临时目录
+- `OTLPExporter` 预留外部监控系统接入位
 
 ## 示例
 
-参考 `event-sample.json`。
+- [HTTP 示例](../examples/http/main.go)
+- [gRPC 示例](../examples/grpc/main.go)
+- [MCP 示例](../examples/mcp/main.go)
+- [OpenAI 示例](../examples/openai/main.go)
