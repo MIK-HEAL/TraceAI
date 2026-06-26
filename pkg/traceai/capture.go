@@ -1,6 +1,7 @@
 package traceai
 
 import (
+	"github.com/MIK-HEAL/TraceAI/internal/events"
 	"time"
 
 	"github.com/MIK-HEAL/TraceAI/pkg/models"
@@ -18,19 +19,17 @@ type CallInfo struct {
 }
 
 func (i CallInfo) Start() models.ToolEvent {
-	event := models.ToolEvent{
-		SchemaVersion:  "v1",
-		Timestamp:      time.Now().UTC(),
-		AdapterName:    i.AdapterName,
-		AdapterVersion: i.AdapterVersion,
-		AgentName:      i.AgentName,
-		AgentVersion:   i.AgentVersion,
-		ToolType:       i.ToolType,
-		ToolName:       i.ToolName,
-		FunctionName:   i.FunctionName,
-		Metadata:       cloneMetadata(i.Metadata),
-	}
-	return event
+	event := events.NewToolEvent()
+	event.Timestamp = time.Now().UTC()
+	event.AdapterName = i.AdapterName
+	event.AdapterVersion = i.AdapterVersion
+	event.AgentName = i.AgentName
+	event.AgentVersion = i.AgentVersion
+	event.ToolType = i.ToolType
+	event.ToolName = i.ToolName
+	event.FunctionName = i.FunctionName
+	event.Metadata = cloneMetadata(i.Metadata)
+	return models.ToolEvent(event)
 }
 
 func (i CallInfo) Finish(start models.ToolEvent, success bool, inputSize, outputSize int64, err error) models.ToolEvent {

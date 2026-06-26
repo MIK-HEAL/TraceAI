@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/MIK-HEAL/TraceAI/internal/events"
 	"github.com/MIK-HEAL/TraceAI/pkg/models"
 	"github.com/MIK-HEAL/TraceAI/pkg/state"
 )
@@ -32,6 +33,7 @@ func (c *Client) Start(ctx context.Context) error {
 
 func (c *Client) Publish(event models.ToolEvent) error {
 	normalized := event.Normalize()
+	normalized = ensureEventIdentity(normalized)
 	if err := c.Store.InsertEvent(context.Background(), normalized); err != nil {
 		return err
 	}
@@ -55,6 +57,26 @@ func (c *Client) Close(timeout time.Duration) error {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
+}
+
+func ensureEventIdentity(event models.ToolEvent) models.ToolEvent {
+	if event.EventID != "" && event.TraceID != "" && event.SessionID != "" && !event.Timestamp.IsZero() {
+		return event
+	}
+	base := events.NewToolEvent()
+	if event.EventID == "" {
+		event.EventID = base.EventID
+	}
+	if event.TraceID == "" {
+		event.TraceID = base.TraceID
+	}
+	if event.SessionID == "" {
+		event.SessionID = base.SessionID
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = base.Timestamp
+	}
+	return event
 }
 
 func (c *Client) Status(ctx context.Context) (state.Status, error) {

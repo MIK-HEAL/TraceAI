@@ -113,7 +113,6 @@ func TestDashboardServeStopsOnContextCancel(t *testing.T) {
 		done <- New(store).ServeListener(ctx, ln, "")
 	}()
 
-	time.Sleep(50 * time.Millisecond)
 	cancel()
 
 	select {

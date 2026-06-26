@@ -22,11 +22,9 @@ func TestEndToEndSmoke(t *testing.T) {
 	client.Publish(buildEvent("mcp", "search", "tool_call", "demo-agent", true, 120, 80, 140))
 	client.Publish(buildEvent("openai", "chat.completions", "function_call", "demo-agent", true, 210, 256, 512))
 
-	waitForEvents(t, store, 2)
 	if err := client.Close(2 * time.Second); err != nil {
 		t.Fatal(err)
 	}
-	waitForEvents(t, store, 2)
 
 	eventsRows, err := store.ListEvents(context.Background(), 10)
 	if err != nil {
@@ -59,28 +57,6 @@ func TestEndToEndSmoke(t *testing.T) {
 	if stats.Calls != 2 {
 		t.Fatalf("expected 2 calls, got %+v", stats)
 	}
-}
-
-func waitForEvents(t *testing.T, store storage.Storage, expected int) {
-	t.Helper()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		eventsRows, err := store.ListEvents(context.Background(), 10)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(eventsRows) >= expected {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	eventsRows, err := store.ListEvents(context.Background(), 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Fatalf("expected at least %d events, got %d", expected, len(eventsRows))
 }
 
 func buildEvent(adapterName, toolName, functionName, agentName string, success bool, durationMS, inputSize, outputSize int64) events.ToolEvent {

@@ -58,19 +58,43 @@ type OTLPEvent struct {
 	Attributes map[string]any `json:"attributes"`
 }
 
-type OTLPExporter struct{}
+type OTLPExporter struct {
+	mu   sync.Mutex
+	file *os.File
+}
 
 func NewOTLPExporter() *OTLPExporter {
 	return &OTLPExporter{}
 }
 
 func (e *OTLPExporter) Export(event models.ToolEvent) error {
-	_ = event
-	return nil
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.file == nil {
+		name := filepath.Join(os.TempDir(), "traceai-otlp.jsonl")
+		file, err := os.OpenFile(name, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			return err
+		}
+		e.file = file
+	}
+	payload, err := json.Marshal(ToOTLP(event))
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(e.file, string(payload))
+	return err
 }
 
 func (e *OTLPExporter) Close() error {
-	return nil
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.file == nil {
+		return nil
+	}
+	err := e.file.Close()
+	e.file = nil
+	return err
 }
 
 func ToOTLP(event models.ToolEvent) OTLPEvent {

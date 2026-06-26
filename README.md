@@ -396,7 +396,7 @@ func main() {
 - `UnaryServerInterceptor` / `StreamServerInterceptor`：gRPC 拦截器
 - `WrapMCP`：包装 MCP handler
 - `SemanticFields()`：查看稳定语义字段
-- `NewLocalExporter()` / `NewOTLPExporter()`：选择导出模式
+- `NewLocalExporter()` / `NewOTLPExporter()`：输出本地 JSONL 或 OTLP 映射事件
 
 ### 你会看到什么效果
 

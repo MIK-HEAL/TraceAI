@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -113,13 +114,35 @@ func TestWrapMCPRecords(t *testing.T) {
 }
 
 func TestTraceaiClientPublishStillWorks(t *testing.T) {
-	store := &stubStore{}
-	client := &Client{Store: store, Export: &stubExporter{}}
-	if err := client.Publish(models.ToolEvent{ToolName: "demo", ToolType: "mcp"}); err != nil {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	client := &Client{Store: store}
+	if err := client.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(store.events) != 1 {
-		t.Fatalf("expected one event, got %d", len(store.events))
+	t.Cleanup(func() {
+		_ = client.Close(5 * time.Second)
+	})
+
+	if err := client.Publish(models.ToolEvent{
+		AdapterName:  "traceai",
+		AgentName:    "demo-agent",
+		ToolName:     "demo",
+		ToolType:     "mcp",
+		FunctionName: "call",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := store.ListEvents(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected one event, got %d", len(rows))
+	}
+	if rows[0].EventID == "" || rows[0].TraceID == "" || rows[0].SessionID == "" {
+		t.Fatalf("expected generated ids, got %+v", rows[0])
 	}
 }
 

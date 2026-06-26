@@ -72,8 +72,9 @@ func TestBusRetriesAndSucceeds(t *testing.T) {
 	event.FunctionName = "tool_call"
 	bus.Publish(event)
 
-	time.Sleep(100 * time.Millisecond)
-	bus.Close()
+	if err := bus.CloseWithTimeout(time.Second); err != nil {
+		t.Fatal(err)
+	}
 
 	if store.calls != 3 {
 		t.Fatalf("expected 3 calls, got %d", store.calls)
@@ -99,8 +100,9 @@ func TestBusReportsPermanentFailure(t *testing.T) {
 	event.FunctionName = "tool_call"
 	bus.Publish(event)
 
-	time.Sleep(100 * time.Millisecond)
-	bus.Close()
+	if err := bus.CloseWithTimeout(time.Second); err != nil {
+		t.Fatal(err)
+	}
 
 	if bus.LastError() == nil {
 		t.Fatal("expected last error to be set")
@@ -132,7 +134,9 @@ func TestBusPublishDoesNotBlockWhenQueueFull(t *testing.T) {
 	bus.Publish(event)
 	bus.Publish(event)
 
-	bus.Close()
+	if err := bus.CloseWithTimeout(time.Second); err != nil {
+		t.Fatal(err)
+	}
 	if store.calls == 0 {
 		t.Fatal("expected at least one persisted event")
 	}

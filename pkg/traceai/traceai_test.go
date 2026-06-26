@@ -2,8 +2,10 @@ package traceai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,6 +122,37 @@ func TestLocalExporterWritesJSONL(t *testing.T) {
 	}
 }
 
+func TestOTLPExporterWritesMappedJSONL(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+	t.Setenv("TEMP", tmpDir)
+	t.Setenv("TMP", tmpDir)
+
+	exporter := NewOTLPExporter()
+	event := models.ToolEvent{ToolName: "search_code", ToolType: "mcp", AgentName: "claude-code"}
+	if err := exporter.Export(event); err != nil {
+		t.Fatal(err)
+	}
+	if err := exporter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(tmpDir, "traceai-otlp.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var otlp OTLPEvent
+	if err := json.Unmarshal(data, &otlp); err != nil {
+		t.Fatal(err)
+	}
+	if got := otlp.Attributes["traceai.tool.name"]; got != "search_code" {
+		t.Fatalf("unexpected OTLP tool name: %#v", otlp.Attributes)
+	}
+	if got := otlp.Attributes["traceai.agent.name"]; got != "claude-code" {
+		t.Fatalf("unexpected OTLP agent name: %#v", otlp.Attributes)
+	}
+}
+
 func TestInterceptorWrapHTTPMapsSemanticFields(t *testing.T) {
 	store := &stubStore{}
 	client := &Client{Store: store, Export: &stubExporter{}}
@@ -159,6 +192,61 @@ func TestInterceptorWrapHTTPMapsSemanticFields(t *testing.T) {
 	}
 	if event.InputSize != int64(len("payload")) || event.OutputSize != 2 {
 		t.Fatalf("unexpected sizes: %+v", event)
+	}
+}
+
+func TestPublicAPIWithRealMemoryStore(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	client := &Client{Store: store}
+	if err := client.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = client.Close(5 * time.Second)
+	})
+
+	if err := CaptureRPC(ctx, client, CallInfo{
+		AdapterName:  "grpc",
+		AgentName:    "claude-code",
+		ToolType:     "grpc",
+		ToolName:     "repo",
+		FunctionName: "ListFiles",
+	}, func(context.Context) (int64, int64, error) {
+		return 4096, 8192, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := HTTPMiddleware(client, CallInfo{
+		AdapterName:  "http",
+		AgentName:    "demo-agent",
+		ToolType:     "http",
+		ToolName:     "health",
+		FunctionName: "GET /health",
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/health", strings.NewReader("payload"))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	rows, err := store.ListEvents(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(rows))
+	}
+	if rows[0].ToolName != "health" || rows[1].ToolName != "repo" {
+		t.Fatalf("unexpected event order or tool names: %+v", rows)
+	}
+	if rows[0].InputSize != int64(len("payload")) || rows[0].OutputSize != 2 {
+		t.Fatalf("unexpected http sizes: %+v", rows[0])
+	}
+	if rows[1].InputSize != 4096 || rows[1].OutputSize != 8192 {
+		t.Fatalf("unexpected grpc sizes: %+v", rows[1])
 	}
 }
 

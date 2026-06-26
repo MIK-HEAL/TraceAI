@@ -48,7 +48,7 @@ TraceAI 统一使用这些字段：
 ## 导出
 
 - `LocalExporter` 输出 JSONL 到系统临时目录
-- `OTLPExporter` 预留外部监控系统接入位
+- `OTLPExporter` 输出 OTLP 映射后的 JSONL 到系统临时目录
 
 ## 示例
 
