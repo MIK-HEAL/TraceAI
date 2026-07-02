@@ -22,6 +22,13 @@ type Storage interface {
 	MonthlyStats(ctx context.Context, since time.Time) ([]MonthlyStat, error)
 	WeeklyStats(ctx context.Context, since time.Time) ([]WeeklyStat, error)
 	ErrorBreakdowns(ctx context.Context, since time.Time, limit int) ([]ErrorBreakdown, error)
+
+	// CallSequences returns the most frequent consecutive tool call chains.
+	// depth controls the chain length: 2 = pairs, 3 = triples.
+	CallSequences(ctx context.Context, since time.Time, depth, limit int) ([]CallSequence, error)
+
+	// RetryPatterns analyses per-tool retry behaviour within sessions.
+	RetryPatterns(ctx context.Context, since time.Time, limit int) ([]RetryPattern, error)
 }
 
 type ToolCount struct {
@@ -96,4 +103,22 @@ type ErrorBreakdown struct {
 	Category  string
 	Calls     int64
 	Failures  int64
+}
+
+// CallSequence represents a consecutive tool call chain (e.g. "search -> read -> write").
+type CallSequence struct {
+	Sequence string // "tool_a -> tool_b -> tool_c"
+	Count    int64
+}
+
+// RetryPattern describes how a tool behaves across retries within a session.
+type RetryPattern struct {
+	ToolName    string
+	TotalCalls  int64
+	Sessions    int64  // number of sessions where this tool appears
+	NeverFails  int64  // all calls succeed
+	AlwaysFails int64  // all calls fail
+	Recovers    int64  // fails then succeeds (recovery)
+	Degrades    int64  // succeeds then fails (degradation)
+	Intermittent int64 // mixed pattern with multiple transitions
 }

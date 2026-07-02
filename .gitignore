@@ -1,11 +1,16 @@
 .gocache/
 .gomodcache/
 .gopath/
+.npm-cache/
 .tmp/
 .modcache/
 bin/
+dist/
 design/
 task/
 toollens.exe
 traceai.exe
 traceai.db
+
+distribution/
+scripts/

@@ -50,3 +50,13 @@ func (e *Engine) WeeklyStats(ctx context.Context, since time.Time) ([]storage.We
 func (e *Engine) ErrorBreakdowns(ctx context.Context, since time.Time, limit int) ([]storage.ErrorBreakdown, error) {
 	return e.Store.ErrorBreakdowns(ctx, since, limit)
 }
+
+// CallSequences returns the most frequent consecutive tool call chains.
+func (e *Engine) CallSequences(ctx context.Context, since time.Time, depth, limit int) ([]storage.CallSequence, error) {
+	return e.Store.CallSequences(ctx, since, depth, limit)
+}
+
+// RetryPatterns analyses per-tool retry behaviour.
+func (e *Engine) RetryPatterns(ctx context.Context, since time.Time, limit int) ([]storage.RetryPattern, error) {
+	return e.Store.RetryPatterns(ctx, since, limit)
+}

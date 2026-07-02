@@ -103,6 +103,16 @@ func run(argv []string, out io.Writer) error {
 		}
 		_, err := fmt.Fprintln(out, "demo data inserted")
 		return err
+	case "mcp":
+		return runMCP(store, args[1:], out)
+	case "call-seq":
+		return runCallSeq(engine, args[1:], out)
+	case "retry-patterns":
+		return runRetryPatterns(engine, args[1:], out)
+	case "zero-calls":
+		return runZeroCalls(engine, args[1:], out)
+	case "high-failures":
+		return runHighFailures(engine, args[1:], out)
 	default:
 		printUsage(out)
 		return nil
@@ -111,7 +121,7 @@ func run(argv []string, out io.Writer) error {
 
 func commandNeedsStorage(command string) bool {
 	switch command {
-	case "top-tools", "top-functions", "top-agents", "stats", "report", "dashboard", "status", "health", "metrics", "export", "seed-demo":
+	case "top-tools", "top-functions", "top-agents", "stats", "report", "dashboard", "status", "health", "metrics", "export", "seed-demo", "mcp", "call-seq", "retry-patterns", "zero-calls", "high-failures":
 		return true
 	case "version":
 		return false
@@ -607,9 +617,14 @@ func wrapError(action string, err error) error {
 
 func printUsage(out io.Writer) {
 	fmt.Fprintln(out, strings.TrimSpace(`
-TraceAI
+TraceAI — Observable MCP Proxy & Tool Usage Analytics
 
 Usage:
+	  traceai [--store sqlite|memory] [--db path] mcp proxy --mcp-cmd "command..." [--agent-name name]
+	  traceai [--store sqlite|memory] [--db path] call-seq [--depth 2|3] [--limit n]
+	  traceai [--store sqlite|memory] [--db path] retry-patterns [--limit n]
+	  traceai [--store sqlite|memory] [--db path] zero-calls --catalog path|tool1,tool2
+	  traceai [--store sqlite|memory] [--db path] high-failures [--threshold 0.3] [--limit n]
   traceai [--store sqlite|memory] [--db path] top-tools
   traceai [--store sqlite|memory] [--db path] top-functions
   traceai [--store sqlite|memory] [--db path] top-agents

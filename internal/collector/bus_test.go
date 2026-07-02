@@ -48,6 +48,12 @@ func (s *retryStorage) WeeklyStats(ctx context.Context, since time.Time) ([]stor
 func (s *retryStorage) ErrorBreakdowns(ctx context.Context, since time.Time, limit int) ([]storage.ErrorBreakdown, error) {
 	return nil, nil
 }
+func (s *retryStorage) CallSequences(ctx context.Context, since time.Time, depth, limit int) ([]storage.CallSequence, error) {
+	return nil, nil
+}
+func (s *retryStorage) RetryPatterns(ctx context.Context, since time.Time, limit int) ([]storage.RetryPattern, error) {
+	return nil, nil
+}
 func (s *retryStorage) InsertEvent(ctx context.Context, event events.ToolEvent) error {
 	s.calls++
 	if s.calls <= s.failures {
@@ -188,6 +194,12 @@ func (s *blockingStorage) WeeklyStats(ctx context.Context, since time.Time) ([]s
 	return nil, nil
 }
 func (s *blockingStorage) ErrorBreakdowns(ctx context.Context, since time.Time, limit int) ([]storage.ErrorBreakdown, error) {
+	return nil, nil
+}
+func (s *blockingStorage) CallSequences(ctx context.Context, since time.Time, depth, limit int) ([]storage.CallSequence, error) {
+	return nil, nil
+}
+func (s *blockingStorage) RetryPatterns(ctx context.Context, since time.Time, limit int) ([]storage.RetryPattern, error) {
 	return nil, nil
 }
 func (s *blockingStorage) InsertEvent(ctx context.Context, event events.ToolEvent) error {

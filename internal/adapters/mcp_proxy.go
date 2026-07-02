@@ -1,0 +1,451 @@
+package adapters
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/MIK-HEAL/TraceAI/internal/collector"
+	"github.com/MIK-HEAL/TraceAI/internal/events"
+)
+
+// ---------------------------------------------------------------------------
+// Proxy configuration
+// ---------------------------------------------------------------------------
+
+// MCPProxyConfig holds all configuration for the MCP transparent proxy.
+type MCPProxyConfig struct {
+	// MCPCmd is the command that launches the real MCP server, e.g.
+	// "npx -y @modelcontextprotocol/server-github".
+	MCPCmd string
+
+	// AgentName overrides the agent name recorded in events.
+	// When empty, the proxy derives it from (in order):
+	//   1. TRACEAI_AGENT_NAME env var
+	//   2. The MCP server's name from the initialize handshake
+	//   3. Fallback: "mcp-proxy"
+	AgentName string
+
+	// AdapterVersion is reported as the adapter version in events.
+	AdapterVersion string
+}
+
+// withDefaults fills in any blank fields with sensible defaults.
+func (c *MCPProxyConfig) withDefaults() *MCPProxyConfig {
+	if c == nil {
+		c = &MCPProxyConfig{}
+	}
+	if c.AdapterVersion == "" {
+		c.AdapterVersion = "0.2.0"
+	}
+	if c.AgentName == "" {
+		if name := os.Getenv("TRACEAI_AGENT_NAME"); name != "" {
+			c.AgentName = name
+		}
+	}
+	return c
+}
+
+// ---------------------------------------------------------------------------
+// Pending call tracking
+// ---------------------------------------------------------------------------
+
+// pendingCall holds the start-time metadata for an in-flight tools/call.
+type pendingCall struct {
+	toolName    string
+	startTime   time.Time
+	requestSize int64
+}
+
+// ---------------------------------------------------------------------------
+// Proxy
+// ---------------------------------------------------------------------------
+
+// MCPProxy is a transparent MCP proxy that sits between an AI agent and a
+// real MCP server.  It intercepts tools/call requests/responses to record
+// ToolEvents without requiring any changes to the agent or the server.
+//
+// All MCP protocol logic is confined to this file and its helpers
+// (mcp_jsonrpc.go, mcp_transport_stdio.go).  The proxy publishes events
+// through the standard collector.EventBus so that downstream components
+// (storage, dashboard, CLI) operate on uniform ToolEvents without ever
+// seeing MCP protocol details.
+type MCPProxy struct {
+	cfg       *MCPProxyConfig
+	transport MCPTransport
+	collector *collector.Collector
+
+	sessionID    string
+	serverName   string // discovered during initialize handshake
+	agentName    string
+	serverTools  []MCPTool // tools discovered from tools/list
+
+	pending map[string]*pendingCall // keyed by JSON-RPC id
+	mu      sync.Mutex
+
+	done   chan struct{}
+	closeOnce sync.Once
+}
+
+// NewMCPProxy creates a proxy that will launch cmd as the real MCP server.
+func NewMCPProxy(cfg *MCPProxyConfig, col *collector.Collector) (*MCPProxy, error) {
+	cfg = cfg.withDefaults()
+	if cfg.MCPCmd == "" {
+		return nil, fmt.Errorf("MCPCmd is required")
+	}
+
+	transport, err := NewStdioTransport(cfg.MCPCmd)
+	if err != nil {
+		return nil, fmt.Errorf("create stdio transport: %w", err)
+	}
+
+	sessionID := events.NewToolEvent().SessionID
+
+	proxy := &MCPProxy{
+		cfg:       cfg,
+		transport: transport,
+		collector: col,
+		sessionID: sessionID,
+		agentName: cfg.AgentName,
+		pending:   make(map[string]*pendingCall),
+		done:      make(chan struct{}),
+	}
+
+	slog.Default().With("component", "mcp_proxy", "session_id", sessionID, "cmd", cfg.MCPCmd).Info("proxy created")
+	return proxy, nil
+}
+
+// Run starts the proxy main loop.  It blocks until ctx is cancelled or
+// an unrecoverable error occurs.
+//
+// The proxy runs two goroutines:
+//   - serverReader: reads messages from the real MCP server, records
+//     tool call completions, and forwards to os.Stdout (the AI agent).
+//   - clientReader: reads messages from os.Stdin (the AI agent),
+//     records tool call starts, and forwards to the real MCP server.
+func (p *MCPProxy) Run(ctx context.Context) error {
+	if err := p.transport.Start(ctx); err != nil {
+		return fmt.Errorf("start transport: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Goroutine 1: server → client (real MCP server stdout → os.Stdout)
+	go func() {
+		defer wg.Done()
+		p.serverReader(ctx)
+	}()
+
+	// Goroutine 2: client → server (os.Stdin → real MCP server stdin)
+	go func() {
+		defer wg.Done()
+		p.clientReader(ctx)
+	}()
+
+	// Wait for either context cancellation or both readers to exit.
+	doneCh := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(doneCh)
+	}()
+
+	select {
+	case <-ctx.Done():
+		slog.Default().With("component", "mcp_proxy").Info("proxy context cancelled")
+	case <-doneCh:
+		slog.Default().With("component", "mcp_proxy").Info("proxy readers exited")
+	}
+
+	cancel()
+	wg.Wait()
+
+	return nil
+}
+
+// Close shuts down the proxy and its transport.
+func (p *MCPProxy) Close() error {
+	var err error
+	p.closeOnce.Do(func() {
+		err = p.transport.Close()
+		close(p.done)
+	})
+	return err
+}
+
+// SessionID returns the proxy's session identifier.
+func (p *MCPProxy) SessionID() string { return p.sessionID }
+
+// ServerName returns the MCP server name discovered during initialize.
+func (p *MCPProxy) ServerName() string { return p.serverName }
+
+// AgentName returns the effective agent name.
+func (p *MCPProxy) AgentName() string { return p.agentName }
+
+// ServerTools returns the tools discovered from tools/list.
+func (p *MCPProxy) ServerTools() []MCPTool { return p.serverTools }
+
+// ---------------------------------------------------------------------------
+// Reader goroutines
+// ---------------------------------------------------------------------------
+
+// serverReader reads messages from the real MCP server and forwards them
+// to os.Stdout (the AI agent).  For tool call responses it records the
+// completion event.
+func (p *MCPProxy) serverReader(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		msg, err := p.transport.Receive(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			slog.Default().With("component", "mcp_proxy", "direction", "server->client").Error("receive error", "error", err)
+			return
+		}
+
+		// Intercept responses to tools/call.
+		if msg.IsResponse() {
+			p.handleServerResponse(msg)
+		}
+
+		// Intercept initialize result to discover server identity.
+		if msg.IsResponse() && msg.Result != nil {
+			p.maybeCaptureInitialize(msg)
+		}
+
+		// Intercept tools/list result to capture the tool catalog.
+		if msg.IsResponse() && msg.Result != nil {
+			p.maybeCaptureToolsList(msg)
+		}
+
+		// Forward to client (os.Stdout).
+		if err := p.writeToClient(msg); err != nil {
+			slog.Default().With("component", "mcp_proxy", "direction", "server->client").Error("write to client", "error", err)
+			return
+		}
+	}
+}
+
+// clientReader reads messages from os.Stdin (the AI agent) and forwards
+// them to the real MCP server.  For tools/call requests it records the
+// start event metadata.
+func (p *MCPProxy) clientReader(ctx context.Context) {
+	scanner := newStdinScanner()
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		data := scanner.Bytes()
+		msg, err := ParseJSONRPCMessage(data)
+		if err != nil {
+			slog.Default().With("component", "mcp_proxy", "direction", "client->server").Warn("parse error", "error", err)
+			// Forward the original bytes anyway — don't break the protocol.
+			p.forwardRawToServer(data)
+			continue
+		}
+
+		// Intercept tools/call requests: record the start time.
+		if msg.IsRequest() && msg.Method == MCPMethodToolsCall {
+			p.handleToolsCallStart(msg)
+		}
+
+		// Forward to real server.
+		if err := p.transport.Send(msg); err != nil {
+			slog.Default().With("component", "mcp_proxy", "direction", "client->server").Error("send error", "error", err)
+			return
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		slog.Default().With("component", "mcp_proxy", "direction", "client->server").Error("stdin read error", "error", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Interception handlers
+// ---------------------------------------------------------------------------
+
+// handleToolsCallStart records the start of a tools/call request.
+func (p *MCPProxy) handleToolsCallStart(msg *JSONRPCMessage) {
+	params, err := ParseToolCallParams(msg)
+	if err != nil {
+		slog.Default().With("component", "mcp_proxy").Warn("could not parse tools/call params", "error", err)
+		return
+	}
+
+	reqSize := int64(len(msg.Params))
+
+	p.mu.Lock()
+	p.pending[msg.IDString()] = &pendingCall{
+		toolName:    params.Name,
+		startTime:   time.Now().UTC(),
+		requestSize: reqSize,
+	}
+	p.mu.Unlock()
+
+	slog.Default().With("component", "mcp_proxy", "tool", params.Name, "id", msg.IDString()).Debug("tools/call started")
+}
+
+// handleServerResponse processes a response from the real MCP server.
+// When it matches a pending tools/call, it builds and publishes a ToolEvent.
+func (p *MCPProxy) handleServerResponse(msg *JSONRPCMessage) {
+	id := msg.IDString()
+	if id == "" {
+		return
+	}
+
+	p.mu.Lock()
+	call, ok := p.pending[id]
+	if ok {
+		delete(p.pending, id)
+	}
+	p.mu.Unlock()
+
+	if !ok {
+		return // not a tools/call we tracked (e.g. tools/list, initialize)
+	}
+
+	now := time.Now().UTC()
+	durationMS := now.Sub(call.startTime).Milliseconds()
+
+	resultSize := int64(len(msg.Result))
+	errorSize := int64(0)
+	if msg.Error != nil {
+		errorSize = int64(len(msg.Error.Data))
+	}
+
+	success := !msg.IsError()
+
+	event := events.NewToolEvent()
+	event.Timestamp = call.startTime
+	event.SessionID = p.sessionID
+	event.AdapterName = "mcp"
+	event.AdapterVersion = p.cfg.AdapterVersion
+	event.AgentName = p.agentName
+	event.AgentVersion = "" // derived from server info if available
+	event.ToolType = "mcp"
+	event.ToolName = call.toolName
+	event.FunctionName = "tools/call"
+	event.Success = success
+	event.DurationMS = durationMS
+	event.InputSize = call.requestSize
+	event.OutputSize = resultSize + errorSize
+
+	if !success {
+		event.ErrorType = ClassifyJSONRPCError(msg.Error.Code)
+		event.ErrorCode = fmt.Sprintf("%d", msg.Error.Code)
+		event.ErrorMessage = msg.Error.Message
+	}
+
+	// Attach MCP metadata.
+	if event.Metadata == nil {
+		event.Metadata = make(map[string]interface{})
+	}
+	event.Metadata["mcp_server"] = p.serverName
+	event.Metadata["mcp_server_cmd"] = p.cfg.MCPCmd
+
+	// Publish through the standard collector for batching + retry.
+	p.collector.Publish(event)
+
+	slog.Default().With("component", "mcp_proxy",
+		"tool", call.toolName,
+		"success", success,
+		"duration_ms", durationMS,
+		"input_size", call.requestSize,
+		"output_size", resultSize,
+		"error_type", event.ErrorType,
+		"event_id", event.EventID,
+	).Info("tool event recorded")
+}
+
+// maybeCaptureInitialize extracts the server identity from an initialize
+// response and updates the agent name if it was not explicitly set.
+func (p *MCPProxy) maybeCaptureInitialize(msg *JSONRPCMessage) {
+	if p.serverName != "" {
+		return // already captured
+	}
+
+	result, err := ParseInitializeResult(msg)
+	if err != nil {
+		return // not an initialize response, or unexpected shape
+	}
+
+	if result.ServerInfo.Name == "" {
+		return
+	}
+
+	p.mu.Lock()
+	p.serverName = result.ServerInfo.Name
+	if p.agentName == "" {
+		// Derive agent name from the connected MCP server.
+		p.agentName = "mcp-client:" + result.ServerInfo.Name
+	}
+	p.mu.Unlock()
+
+	slog.Default().With("component", "mcp_proxy",
+		"server_name", result.ServerInfo.Name,
+		"server_version", result.ServerInfo.Version,
+		"protocol_version", result.ProtocolVersion,
+		"agent_name", p.agentName,
+	).Info("mcp initialize captured")
+}
+
+// maybeCaptureToolsList records the tool catalog from a tools/list response.
+func (p *MCPProxy) maybeCaptureToolsList(msg *JSONRPCMessage) {
+	result, err := ParseToolsListResult(msg)
+	if err != nil {
+		return
+	}
+
+	p.mu.Lock()
+	p.serverTools = result.Tools
+	p.mu.Unlock()
+
+	slog.Default().With("component", "mcp_proxy", "tool_count", len(result.Tools)).Info("tools/list captured")
+}
+
+// ---------------------------------------------------------------------------
+// I/O helpers
+// ---------------------------------------------------------------------------
+
+// writeToClient writes a message to os.Stdout (newline-delimited JSON).
+func (p *MCPProxy) writeToClient(msg *JSONRPCMessage) error {
+	data, err := MarshalJSONRPCMessage(msg)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Printf("%s\n", data)
+	return err
+}
+
+// forwardRawToServer sends raw bytes to the real MCP server without
+// re-serialising.  Used as a fallback when we cannot parse a client message.
+func (p *MCPProxy) forwardRawToServer(data []byte) {
+	if err := p.transport.SendRaw(data); err != nil {
+		slog.Default().With("component", "mcp_proxy", "direction", "client->server").Error("raw forward error", "error", err)
+	}
+}
+
+// newStdinScanner returns a buffered scanner reading from os.Stdin.
+// Uses a large buffer to handle big MCP messages.
+func newStdinScanner() *bufio.Scanner {
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	return scanner
+}

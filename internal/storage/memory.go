@@ -418,3 +418,211 @@ func containsAny(value string, tokens []string) bool {
 	}
 	return false
 }
+
+// ---------------------------------------------------------------------------
+// Call sequence and retry pattern analysis (M203)
+// ---------------------------------------------------------------------------
+
+func (s *MemoryStorage) CallSequences(ctx context.Context, since time.Time, depth, limit int) ([]CallSequence, error) {
+	_ = ctx
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if depth < 2 {
+		depth = 2
+	}
+	if depth > 5 {
+		depth = 5 // practical cap
+	}
+
+	// Group events by session, sorted by timestamp.
+	sessions := s.groupBySession(since)
+
+	// Count sequences across all sessions.
+	seqCounts := make(map[string]int64)
+	for _, events := range sessions {
+		if len(events) < depth {
+			continue
+		}
+		for i := 0; i <= len(events)-depth; i++ {
+			parts := make([]string, depth)
+			for j := 0; j < depth; j++ {
+				parts[j] = events[i+j].ToolName
+			}
+			seq := strings.Join(parts, " -> ")
+			seqCounts[seq]++
+		}
+	}
+
+	// Sort by count descending.
+	items := make([]CallSequence, 0, len(seqCounts))
+	for seq, count := range seqCounts {
+		items = append(items, CallSequence{Sequence: seq, Count: count})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Count == items[j].Count {
+			return items[i].Sequence < items[j].Sequence
+		}
+		return items[i].Count > items[j].Count
+	})
+
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
+func (s *MemoryStorage) RetryPatterns(ctx context.Context, since time.Time, limit int) ([]RetryPattern, error) {
+	_ = ctx
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Group events by session+tool.
+	type sessionTool struct {
+		sessionID string
+		toolName  string
+	}
+	groups := make(map[sessionTool][]events.ToolEvent)
+	for _, event := range s.events {
+		if !since.IsZero() && event.Timestamp.Before(since) {
+			continue
+		}
+		if event.ToolName == "" {
+			continue
+		}
+		key := sessionTool{event.SessionID, event.ToolName}
+		groups[key] = append(groups[key], event)
+	}
+
+	// Aggregate patterns per tool.
+	type toolAgg struct {
+		totalCalls  int64
+		sessions    int64
+		neverFails  int64
+		alwaysFails int64
+		recovers    int64
+		degrades    int64
+		intermittent int64
+	}
+	agg := make(map[string]*toolAgg)
+
+	for _, evts := range groups {
+		if len(evts) == 0 {
+			continue
+		}
+		// Sort by timestamp.
+		sort.Slice(evts, func(i, j int) bool {
+			return evts[i].Timestamp.Before(evts[j].Timestamp)
+		})
+
+		toolName := evts[0].ToolName
+		a, ok := agg[toolName]
+		if !ok {
+			a = &toolAgg{}
+			agg[toolName] = a
+		}
+
+		a.totalCalls += int64(len(evts))
+		a.sessions++
+
+		// Classify the pattern for this session+tool.
+		pattern := classifyRetryPattern(evts)
+		switch pattern {
+		case "never_fails":
+			a.neverFails++
+		case "always_fails":
+			a.alwaysFails++
+		case "recovers":
+			a.recovers++
+		case "degrades":
+			a.degrades++
+		case "intermittent":
+			a.intermittent++
+		}
+	}
+
+	// Convert to sorted slice.
+	items := make([]RetryPattern, 0, len(agg))
+	for toolName, a := range agg {
+		items = append(items, RetryPattern{
+			ToolName:     toolName,
+			TotalCalls:   a.totalCalls,
+			Sessions:     a.sessions,
+			NeverFails:   a.neverFails,
+			AlwaysFails:  a.alwaysFails,
+			Recovers:     a.recovers,
+			Degrades:     a.degrades,
+			Intermittent: a.intermittent,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].TotalCalls == items[j].TotalCalls {
+			return items[i].ToolName < items[j].ToolName
+		}
+		return items[i].TotalCalls > items[j].TotalCalls
+	})
+
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
+// groupBySession groups events by session ID and sorts each group by timestamp.
+func (s *MemoryStorage) groupBySession(since time.Time) map[string][]events.ToolEvent {
+	groups := make(map[string][]events.ToolEvent)
+	for _, event := range s.events {
+		if !since.IsZero() && event.Timestamp.Before(since) {
+			continue
+		}
+		if event.ToolName == "" {
+			continue
+		}
+		groups[event.SessionID] = append(groups[event.SessionID], event)
+	}
+	// Sort each group by timestamp.
+	for _, evts := range groups {
+		sort.Slice(evts, func(i, j int) bool {
+			return evts[i].Timestamp.Before(evts[j].Timestamp)
+		})
+	}
+	return groups
+}
+
+// classifyRetryPattern analyses a sorted list of events for the same session+tool
+// and classifies the retry behaviour.
+func classifyRetryPattern(evts []events.ToolEvent) string {
+	if len(evts) == 0 {
+		return "never_fails"
+	}
+
+	allSuccess := true
+	allFail := true
+	transitions := 0
+	prevSuccess := evts[0].Success
+
+	for _, e := range evts {
+		if e.Success {
+			allFail = false
+		} else {
+			allSuccess = false
+		}
+		if e.Success != prevSuccess {
+			transitions++
+			prevSuccess = e.Success
+		}
+	}
+
+	switch {
+	case allSuccess:
+		return "never_fails"
+	case allFail:
+		return "always_fails"
+	case transitions == 1 && !evts[0].Success:
+		return "recovers"
+	case transitions == 1 && evts[0].Success:
+		return "degrades"
+	default:
+		return "intermittent"
+	}
+}

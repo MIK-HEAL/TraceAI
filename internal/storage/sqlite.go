@@ -553,6 +553,44 @@ func boolToInt(v bool) int {
 	return 0
 }
 
+// ---------------------------------------------------------------------------
+// Call sequence and retry pattern analysis (M203)
+// Implemented by loading events and delegating to the same in-memory analysis
+// used by MemoryStorage.  A future optimisation could push this into SQL
+// window functions.
+// ---------------------------------------------------------------------------
+
+func (s *SQLiteStorage) CallSequences(ctx context.Context, since time.Time, depth, limit int) ([]CallSequence, error) {
+	tmp := &MemoryStorage{}
+	if err := s.copyInto(ctx, tmp, since); err != nil {
+		return nil, err
+	}
+	return tmp.CallSequences(ctx, since, depth, limit)
+}
+
+func (s *SQLiteStorage) RetryPatterns(ctx context.Context, since time.Time, limit int) ([]RetryPattern, error) {
+	tmp := &MemoryStorage{}
+	if err := s.copyInto(ctx, tmp, since); err != nil {
+		return nil, err
+	}
+	return tmp.RetryPatterns(ctx, since, limit)
+}
+
+// copyInto copies events from SQLite into a MemoryStorage.
+func (s *SQLiteStorage) copyInto(ctx context.Context, dest *MemoryStorage, since time.Time) error {
+	events, err := s.ListEvents(ctx, 0)
+	if err != nil {
+		return err
+	}
+	for _, e := range events {
+		if !since.IsZero() && e.Timestamp.Before(since) {
+			continue
+		}
+		_ = dest.InsertEvent(ctx, e)
+	}
+	return nil
+}
+
 func mustJSON(v map[string]interface{}) string {
 	if len(v) == 0 {
 		return "{}"
