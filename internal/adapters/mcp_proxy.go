@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,19 +77,20 @@ type pendingCall struct {
 // (storage, dashboard, CLI) operate on uniform ToolEvents without ever
 // seeing MCP protocol details.
 type MCPProxy struct {
-	cfg       *MCPProxyConfig
-	transport MCPTransport
-	collector *collector.Collector
+	transport      MCPTransport
+	collector      *collector.Collector
+	adapterVersion string
+	serverCommand  string
 
-	sessionID    string
-	serverName   string // discovered during initialize handshake
-	agentName    string
-	serverTools  []MCPTool // tools discovered from tools/list
+	sessionID   string
+	serverName  string // discovered during initialize handshake
+	agentName   string
+	serverTools []MCPTool // tools discovered from tools/list
 
 	pending map[string]*pendingCall // keyed by JSON-RPC id
 	mu      sync.Mutex
 
-	done   chan struct{}
+	done      chan struct{}
 	closeOnce sync.Once
 }
 
@@ -106,16 +109,17 @@ func NewMCPProxy(cfg *MCPProxyConfig, col *collector.Collector) (*MCPProxy, erro
 	sessionID := events.NewToolEvent().SessionID
 
 	proxy := &MCPProxy{
-		cfg:       cfg,
-		transport: transport,
-		collector: col,
-		sessionID: sessionID,
-		agentName: cfg.AgentName,
-		pending:   make(map[string]*pendingCall),
-		done:      make(chan struct{}),
+		transport:      transport,
+		collector:      col,
+		adapterVersion: cfg.AdapterVersion,
+		serverCommand:  commandLabel(cfg.MCPCmd),
+		sessionID:      sessionID,
+		agentName:      cfg.AgentName,
+		pending:        make(map[string]*pendingCall),
+		done:           make(chan struct{}),
 	}
 
-	slog.Default().With("component", "mcp_proxy", "session_id", sessionID, "cmd", cfg.MCPCmd).Info("proxy created")
+	slog.Default().With("component", "mcp_proxy", "session_id", sessionID, "server_command", proxy.serverCommand).Info("proxy created")
 	return proxy, nil
 }
 
@@ -184,13 +188,25 @@ func (p *MCPProxy) Close() error {
 func (p *MCPProxy) SessionID() string { return p.sessionID }
 
 // ServerName returns the MCP server name discovered during initialize.
-func (p *MCPProxy) ServerName() string { return p.serverName }
+func (p *MCPProxy) ServerName() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.serverName
+}
 
 // AgentName returns the effective agent name.
-func (p *MCPProxy) AgentName() string { return p.agentName }
+func (p *MCPProxy) AgentName() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.agentName
+}
 
 // ServerTools returns the tools discovered from tools/list.
-func (p *MCPProxy) ServerTools() []MCPTool { return p.serverTools }
+func (p *MCPProxy) ServerTools() []MCPTool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]MCPTool(nil), p.serverTools...)
+}
 
 // ---------------------------------------------------------------------------
 // Reader goroutines
@@ -336,8 +352,11 @@ func (p *MCPProxy) handleServerResponse(msg *JSONRPCMessage) {
 	event.Timestamp = call.startTime
 	event.SessionID = p.sessionID
 	event.AdapterName = "mcp"
-	event.AdapterVersion = p.cfg.AdapterVersion
+	event.AdapterVersion = p.adapterVersion
+	p.mu.Lock()
 	event.AgentName = p.agentName
+	serverName := p.serverName
+	p.mu.Unlock()
 	event.AgentVersion = "" // derived from server info if available
 	event.ToolType = "mcp"
 	event.ToolName = call.toolName
@@ -357,11 +376,13 @@ func (p *MCPProxy) handleServerResponse(msg *JSONRPCMessage) {
 	if event.Metadata == nil {
 		event.Metadata = make(map[string]interface{})
 	}
-	event.Metadata["mcp_server"] = p.serverName
-	event.Metadata["mcp_server_cmd"] = p.cfg.MCPCmd
+	event.Metadata["mcp_server"] = serverName
+	event.Metadata["mcp_server_command"] = p.serverCommand
 
 	// Publish through the standard collector for batching + retry.
-	p.collector.Publish(event)
+	if err := p.collector.Publish(event); err != nil {
+		slog.Default().With("component", "mcp_proxy", "event_id", event.EventID, "tool", call.toolName).Warn("tool event was not queued", "error", err)
+	}
 
 	slog.Default().With("component", "mcp_proxy",
 		"tool", call.toolName,
@@ -377,10 +398,6 @@ func (p *MCPProxy) handleServerResponse(msg *JSONRPCMessage) {
 // maybeCaptureInitialize extracts the server identity from an initialize
 // response and updates the agent name if it was not explicitly set.
 func (p *MCPProxy) maybeCaptureInitialize(msg *JSONRPCMessage) {
-	if p.serverName != "" {
-		return // already captured
-	}
-
 	result, err := ParseInitializeResult(msg)
 	if err != nil {
 		return // not an initialize response, or unexpected shape
@@ -391,19 +408,34 @@ func (p *MCPProxy) maybeCaptureInitialize(msg *JSONRPCMessage) {
 	}
 
 	p.mu.Lock()
+	if p.serverName != "" {
+		p.mu.Unlock()
+		return // already captured
+	}
 	p.serverName = result.ServerInfo.Name
 	if p.agentName == "" {
 		// Derive agent name from the connected MCP server.
 		p.agentName = "mcp-client:" + result.ServerInfo.Name
 	}
+	agentName := p.agentName
 	p.mu.Unlock()
 
 	slog.Default().With("component", "mcp_proxy",
 		"server_name", result.ServerInfo.Name,
 		"server_version", result.ServerInfo.Version,
 		"protocol_version", result.ProtocolVersion,
-		"agent_name", p.agentName,
+		"agent_name", agentName,
 	).Info("mcp initialize captured")
+}
+
+// commandLabel preserves enough information to identify the transport while
+// deliberately excluding arguments, which often contain credentials.
+func commandLabel(command string) string {
+	fields := strings.Fields(strings.TrimSpace(command))
+	if len(fields) == 0 {
+		return ""
+	}
+	return filepath.Base(fields[0])
 }
 
 // maybeCaptureToolsList records the tool catalog from a tools/list response.

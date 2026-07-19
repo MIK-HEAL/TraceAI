@@ -22,8 +22,8 @@ func (c *Collector) Start(ctx context.Context) error {
 	return c.Bus.Start(ctx)
 }
 
-func (c *Collector) Publish(event events.ToolEvent) {
-	c.Bus.Publish(event)
+func (c *Collector) Publish(event events.ToolEvent) error {
+	return c.Bus.Publish(event)
 }
 
 func (c *Collector) Close(timeout time.Duration) error {

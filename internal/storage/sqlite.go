@@ -15,7 +15,7 @@ import (
 )
 
 type SQLiteStorage struct {
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	path string
 	db   *sql.DB
 }
@@ -29,20 +29,41 @@ func NewSQLiteStorage(path string) *SQLiteStorage {
 
 func (s *SQLiteStorage) Init(ctx context.Context) error {
 	logger := slog.Default().With("component", "storage", "backend", "sqlite")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db != nil {
+		return fmt.Errorf("storage already initialized")
+	}
+
 	db, err := sql.Open("sqlite", s.path)
 	if err != nil {
 		logger.Error("storage init failed", "error", err)
 		return err
 	}
 	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	for _, pragma := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA busy_timeout=5000",
+		"PRAGMA foreign_keys=ON",
+	} {
+		if _, err := db.ExecContext(ctx, pragma); err != nil {
+			_ = db.Close()
+			logger.Error("storage configuration failed", "pragma", pragma, "error", err)
+			return fmt.Errorf("configure sqlite: %w", err)
+		}
+	}
 	if err := s.migrate(ctx, db); err != nil {
 		_ = db.Close()
 		logger.Error("storage migration failed", "error", err)
 		return err
 	}
-	s.mu.Lock()
+	if err := redactLegacyMCPCommands(ctx, db); err != nil {
+		_ = db.Close()
+		logger.Error("storage metadata migration failed", "error", err)
+		return err
+	}
 	s.db = db
-	s.mu.Unlock()
 	logger.Info("storage initialized", "path", s.path)
 	return nil
 }
@@ -64,9 +85,9 @@ func (s *SQLiteStorage) Close() error {
 }
 
 func (s *SQLiteStorage) Ping(ctx context.Context) error {
-	s.mu.Lock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	db := s.db
-	s.mu.Unlock()
 	if db == nil {
 		slog.Default().With("component", "storage", "backend", "sqlite").Warn("storage ping failed", "reason", "not_initialized")
 		return fmt.Errorf("storage not initialized")
@@ -79,9 +100,13 @@ func (s *SQLiteStorage) InsertEvent(ctx context.Context, event events.ToolEvent)
 		slog.Default().With("component", "storage", "backend", "sqlite").Error("insert event failed", "event_id", event.EventID, "error", err)
 		return err
 	}
-	s.mu.Lock()
+	metadata, err := marshalMetadata(sanitizeMetadata(event.Metadata))
+	if err != nil {
+		return fmt.Errorf("marshal event metadata: %w", err)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	db := s.db
-	s.mu.Unlock()
 	if db == nil {
 		err := fmt.Errorf("storage not initialized")
 		slog.Default().With("component", "storage", "backend", "sqlite").Error("insert event failed", "event_id", event.EventID, "error", err)
@@ -104,7 +129,7 @@ func (s *SQLiteStorage) InsertEvent(ctx context.Context, event events.ToolEvent)
 	`, event.EventID, event.SchemaVersion, event.TraceID, event.SessionID, event.Timestamp.UTC().Format(time.RFC3339Nano),
 		event.AgentName, event.AgentVersion, event.AdapterName, event.AdapterVersion,
 		event.ToolType, event.ToolName, event.FunctionName, boolToInt(event.Success), event.DurationMS,
-		event.InputSize, event.OutputSize, event.RetryCount, event.ErrorType, event.ErrorCode, event.ErrorMessage, mustJSON(event.Metadata)); err != nil {
+		event.InputSize, event.OutputSize, event.RetryCount, event.ErrorType, event.ErrorCode, event.ErrorMessage, metadata); err != nil {
 		slog.Default().With("component", "storage", "backend", "sqlite").Error("insert event failed", "event_id", event.EventID, "error", err)
 		return err
 	}
@@ -171,18 +196,33 @@ func (s *SQLiteStorage) InsertEvent(ctx context.Context, event events.ToolEvent)
 }
 
 func (s *SQLiteStorage) ListEvents(ctx context.Context, limit int) ([]events.ToolEvent, error) {
-	if limit <= 0 {
-		limit = 100
+	return s.listEvents(ctx, time.Time{}, limit)
+}
+
+func (s *SQLiteStorage) listEvents(ctx context.Context, since time.Time, limit int) ([]events.ToolEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.db == nil {
+		return nil, fmt.Errorf("storage not initialized")
 	}
-	rows, err := s.db.QueryContext(ctx, `
+
+	where, args := sinceClause(since)
+	limitClause := ""
+	if limit > 0 {
+		limitClause = "LIMIT ?"
+		args = append(args, limit)
+	}
+	query := fmt.Sprintf(`
 		SELECT event_id, schema_version, trace_id, session_id, timestamp,
 			agent_name, agent_version, adapter_name, adapter_version,
 			tool_type, tool_name, function_name, success, duration_ms,
 			input_size, output_size, retry_count, error_type, error_code, error_message, metadata
 		FROM events
+		%s
 		ORDER BY timestamp DESC
-		LIMIT ?
-	`, limit)
+		%s
+	`, where, limitClause)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -202,11 +242,16 @@ func (s *SQLiteStorage) ListEvents(ctx context.Context, limit int) ([]events.Too
 		); err != nil {
 			return nil, err
 		}
-		if parsed, err := time.Parse(time.RFC3339Nano, timestamp); err == nil {
-			event.Timestamp = parsed
+		parsed, err := time.Parse(time.RFC3339Nano, timestamp)
+		if err != nil {
+			return nil, fmt.Errorf("parse event %q timestamp: %w", event.EventID, err)
 		}
+		event.Timestamp = parsed
 		event.Success = success == 1
-		event.Metadata = parseJSON(metadata)
+		event.Metadata, err = unmarshalMetadata(metadata)
+		if err != nil {
+			return nil, fmt.Errorf("parse event %q metadata: %w", event.EventID, err)
+		}
 		out = append(out, event)
 	}
 	return out, rows.Err()
@@ -250,6 +295,11 @@ func (s *SQLiteStorage) TopAgents(ctx context.Context, since time.Time, limit in
 }
 
 func (s *SQLiteStorage) ToolFailureRates(ctx context.Context, since time.Time, limit int) ([]ToolFailureRate, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.db == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
 	where, args := sinceClause(since)
 	limitClause := ""
 	if limit > 0 {
@@ -284,6 +334,11 @@ func (s *SQLiteStorage) ToolFailureRates(ctx context.Context, since time.Time, l
 }
 
 func (s *SQLiteStorage) Stats(ctx context.Context, since time.Time) (Stats, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.db == nil {
+		return Stats{}, fmt.Errorf("storage not initialized")
+	}
 	where, args := sinceClause(since)
 	query := fmt.Sprintf(`
 		SELECT COUNT(*) AS calls,
@@ -307,6 +362,11 @@ func (s *SQLiteStorage) Stats(ctx context.Context, since time.Time) (Stats, erro
 }
 
 func (s *SQLiteStorage) DailyStats(ctx context.Context, since time.Time) ([]DailyStat, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.db == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
 	where, args := sinceDayClause(since)
 	query := fmt.Sprintf(`
 		SELECT stat_day, call_count, success_count, total_duration_ms, input_size, output_size
@@ -331,6 +391,11 @@ func (s *SQLiteStorage) DailyStats(ctx context.Context, since time.Time) ([]Dail
 }
 
 func (s *SQLiteStorage) MonthlyStats(ctx context.Context, since time.Time) ([]MonthlyStat, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.db == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
 	where, args := sinceClause(since)
 	query := fmt.Sprintf(`
 		SELECT substr(timestamp, 1, 7) AS stat_month,
@@ -361,6 +426,11 @@ func (s *SQLiteStorage) MonthlyStats(ctx context.Context, since time.Time) ([]Mo
 }
 
 func (s *SQLiteStorage) WeeklyStats(ctx context.Context, since time.Time) ([]WeeklyStat, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.db == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
 	where, args := sinceClause(since)
 	query := fmt.Sprintf(`
 		SELECT strftime('%%Y-W%%W', timestamp) AS stat_week,
@@ -391,6 +461,11 @@ func (s *SQLiteStorage) WeeklyStats(ctx context.Context, since time.Time) ([]Wee
 }
 
 func (s *SQLiteStorage) ErrorBreakdowns(ctx context.Context, since time.Time, limit int) ([]ErrorBreakdown, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.db == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
 	where, args := sinceClause(since)
 	limitClause := ""
 	if limit > 0 {
@@ -430,6 +505,11 @@ func (s *SQLiteStorage) ErrorBreakdowns(ctx context.Context, since time.Time, li
 }
 
 func (s *SQLiteStorage) topCounts(ctx context.Context, since time.Time, limit int, baseQuery, column string) ([]ToolCount, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.db == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
 	where, args := sinceClause(since)
 	limitClause := ""
 	if limit > 0 {
@@ -521,6 +601,7 @@ func (s *SQLiteStorage) migrate(ctx context.Context, db *sql.DB) error {
 			output_size INTEGER NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);`,
+		`CREATE INDEX IF NOT EXISTS idx_events_session_timestamp ON events(session_id, timestamp);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_tool_name ON events(tool_name);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_agent_name ON events(agent_name);`,
 	}
@@ -530,6 +611,65 @@ func (s *SQLiteStorage) migrate(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// redactLegacyMCPCommands removes command lines saved by older versions. A
+// command's arguments can carry bearer tokens, API keys, or credentials and
+// should never be persisted in a telemetry database.
+func redactLegacyMCPCommands(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `SELECT event_id, metadata FROM events WHERE metadata LIKE ?`, "%mcp_server_cmd%")
+	if err != nil {
+		return err
+	}
+	type update struct {
+		eventID  string
+		metadata string
+	}
+	var updates []update
+	for rows.Next() {
+		var eventID, raw string
+		if err := rows.Scan(&eventID, &raw); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		metadata, err := unmarshalMetadata(raw)
+		if err != nil {
+			slog.Default().With("component", "storage", "backend", "sqlite", "event_id", eventID).Warn("skipped malformed legacy metadata", "error", err)
+			continue
+		}
+		if _, ok := metadata["mcp_server_cmd"]; !ok {
+			continue
+		}
+		delete(metadata, "mcp_server_cmd")
+		encoded, err := marshalMetadata(metadata)
+		if err != nil {
+			_ = rows.Close()
+			return err
+		}
+		updates = append(updates, update{eventID: eventID, metadata: encoded})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, item := range updates {
+		if _, err := tx.ExecContext(ctx, `UPDATE events SET metadata = ? WHERE event_id = ?`, item.metadata, item.eventID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func sinceClause(since time.Time) (string, []any) {
@@ -578,37 +718,54 @@ func (s *SQLiteStorage) RetryPatterns(ctx context.Context, since time.Time, limi
 
 // copyInto copies events from SQLite into a MemoryStorage.
 func (s *SQLiteStorage) copyInto(ctx context.Context, dest *MemoryStorage, since time.Time) error {
-	events, err := s.ListEvents(ctx, 0)
+	events, err := s.listEvents(ctx, since, 0)
 	if err != nil {
 		return err
 	}
 	for _, e := range events {
-		if !since.IsZero() && e.Timestamp.Before(since) {
-			continue
+		if err := dest.InsertEvent(ctx, e); err != nil {
+			return err
 		}
-		_ = dest.InsertEvent(ctx, e)
 	}
 	return nil
 }
 
-func mustJSON(v map[string]interface{}) string {
+func marshalMetadata(v map[string]interface{}) (string, error) {
 	if len(v) == 0 {
-		return "{}"
+		return "{}", nil
 	}
 	data, err := json.Marshal(v)
 	if err != nil {
-		return "{}"
+		return "", err
 	}
-	return string(data)
+	return string(data), nil
 }
 
-func parseJSON(v string) map[string]interface{} {
-	if v == "" {
-		return map[string]interface{}{}
+// sanitizeMetadata prevents legacy callers from reintroducing the raw MCP
+// command-line field that older proxy versions persisted.
+func sanitizeMetadata(v map[string]interface{}) map[string]interface{} {
+	if _, ok := v["mcp_server_cmd"]; !ok {
+		return v
 	}
-	var out map[string]interface{}
-	if err := json.Unmarshal([]byte(v), &out); err != nil || out == nil {
-		return map[string]interface{}{}
+	out := make(map[string]interface{}, len(v)-1)
+	for key, value := range v {
+		if key != "mcp_server_cmd" {
+			out[key] = value
+		}
 	}
 	return out
+}
+
+func unmarshalMetadata(v string) (map[string]interface{}, error) {
+	if v == "" {
+		return map[string]interface{}{}, nil
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		return map[string]interface{}{}, nil
+	}
+	return out, nil
 }

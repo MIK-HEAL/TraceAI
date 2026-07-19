@@ -2,10 +2,12 @@ package dashboard
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"html"
 	"html/template"
+	"log/slog"
 	"net"
 	"net/http"
 	"sort"
@@ -33,6 +35,8 @@ type pageData struct {
 	Title string
 	Body  template.HTML
 }
+
+const dashboardTokenCookie = "traceai_dashboard_token"
 
 var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 <html lang="en">
@@ -202,6 +206,12 @@ func (d *Dashboard) Serve(ctx context.Context, addr, token string) error {
 }
 
 func (d *Dashboard) ServeListener(ctx context.Context, ln net.Listener, token string) error {
+	if ln == nil {
+		return errors.New("dashboard listener is required")
+	}
+	if token == "" && !isLoopbackBind(ln.Addr().String()) {
+		return errors.New("dashboard token required for non-local listener")
+	}
 	srv := &http.Server{
 		Handler:           d.Handler(token),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -525,7 +535,8 @@ func renderEventTable(rows []events.ToolEvent) string {
 }
 
 func writeServerError(w http.ResponseWriter, err error) {
-	http.Error(w, err.Error(), http.StatusInternalServerError)
+	slog.Default().With("component", "dashboard").Error("request failed", "error", err)
+	http.Error(w, "internal server error", http.StatusInternalServerError)
 }
 
 func authMiddleware(token string, next http.Handler) http.Handler {
@@ -538,6 +549,15 @@ func authMiddleware(token string, next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		if tokenFromHeader(r, token) {
+			http.SetCookie(w, &http.Cookie{
+				Name:     dashboardTokenCookie,
+				Value:    token,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+			})
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -546,16 +566,27 @@ func authorized(r *http.Request, token string) bool {
 	if strings.TrimSpace(token) == "" {
 		return true
 	}
+	if cookie, err := r.Cookie(dashboardTokenCookie); err == nil && tokenMatches(cookie.Value, token) {
+		return true
+	}
+	return tokenFromHeader(r, token)
+}
+
+func tokenFromHeader(r *http.Request, token string) bool {
 	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
 	if strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
-		if strings.TrimSpace(authorization[len("Bearer "):]) == token {
+		if tokenMatches(strings.TrimSpace(authorization[len("Bearer "):]), token) {
 			return true
 		}
 	}
-	if strings.TrimSpace(r.Header.Get("X-TraceAI-Token")) == token {
+	if tokenMatches(strings.TrimSpace(r.Header.Get("X-TraceAI-Token")), token) {
 		return true
 	}
 	return false
+}
+
+func tokenMatches(candidate, token string) bool {
+	return subtle.ConstantTimeCompare([]byte(candidate), []byte(token)) == 1
 }
 
 func isLoopbackBind(addr string) bool {

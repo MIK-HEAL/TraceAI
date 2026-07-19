@@ -73,7 +73,7 @@ func runMCPProxy(store storage.Storage, args []string, out io.Writer) error {
 	// Write status to stderr — stdout is reserved for MCP JSON-RPC protocol.
 	_, _ = fmt.Fprintf(os.Stderr, "TraceAI MCP Proxy starting\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  session: %s\n", proxy.SessionID())
-	_, _ = fmt.Fprintf(os.Stderr, "  command: %s\n", *mcpCmd)
+	_, _ = fmt.Fprintln(os.Stderr, "  command: configured (arguments redacted)")
 	_, _ = fmt.Fprintf(os.Stderr, "  agent:   %s\n", proxy.AgentName())
 	_, _ = fmt.Fprintf(os.Stderr, "Press Ctrl+C to stop.\n\n")
 

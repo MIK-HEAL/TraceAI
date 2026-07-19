@@ -47,6 +47,9 @@ func run(argv []string, out io.Writer) error {
 	if err := config.ApplyFile(fs, cfg); err != nil {
 		return wrapError("load config", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		return wrapError("validate config", err)
+	}
 	logging.Configure(cfg.LogLevel, cfg.LogFormat, os.Stderr)
 
 	args := fs.Args()

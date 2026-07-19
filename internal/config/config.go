@@ -67,6 +67,42 @@ func ApplyFile(fs *flag.FlagSet, cfg *Config) error {
 	return nil
 }
 
+// Validate normalizes accepted aliases and rejects values that would otherwise
+// silently fall back to another runtime behaviour.
+func (c *Config) Validate() error {
+	if c == nil {
+		return fmt.Errorf("config is required")
+	}
+	c.Store = strings.ToLower(strings.TrimSpace(c.Store))
+	switch c.Store {
+	case "sqlite", "memory":
+	default:
+		return fmt.Errorf("unsupported store %q (expected sqlite or memory)", c.Store)
+	}
+	c.DB = strings.TrimSpace(c.DB)
+	if c.Store == "sqlite" && c.DB == "" {
+		return fmt.Errorf("db path is required for sqlite storage")
+	}
+
+	c.LogLevel = strings.ToLower(strings.TrimSpace(c.LogLevel))
+	if c.LogLevel == "warning" {
+		c.LogLevel = "warn"
+	}
+	switch c.LogLevel {
+	case "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("unsupported log level %q (expected debug, info, warn, or error)", c.LogLevel)
+	}
+
+	c.LogFormat = strings.ToLower(strings.TrimSpace(c.LogFormat))
+	switch c.LogFormat {
+	case "text", "json":
+	default:
+		return fmt.Errorf("unsupported log format %q (expected text or json)", c.LogFormat)
+	}
+	return nil
+}
+
 func envOrDefault(key, fallback string) string {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {

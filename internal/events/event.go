@@ -13,7 +13,7 @@ const SchemaVersion = "v1"
 
 type ToolEvent struct {
 	EventID        string                 `json:"event_id"`
-	SchemaVersion   string                 `json:"schema_version"`
+	SchemaVersion  string                 `json:"schema_version"`
 	TraceID        string                 `json:"trace_id"`
 	SessionID      string                 `json:"session_id"`
 	Timestamp      time.Time              `json:"timestamp"`
@@ -39,7 +39,7 @@ func NewToolEvent() ToolEvent {
 	now := time.Now().UTC()
 	return ToolEvent{
 		EventID:       newID("evt"),
-		SchemaVersion:  SchemaVersion,
+		SchemaVersion: SchemaVersion,
 		TraceID:       newID("trc"),
 		SessionID:     newID("ses"),
 		Timestamp:     now,
@@ -53,6 +53,10 @@ func (e ToolEvent) Validate() error {
 		return errors.New("event_id is required")
 	case e.SchemaVersion == "":
 		return errors.New("schema_version is required")
+	case e.TraceID == "":
+		return errors.New("trace_id is required")
+	case e.SessionID == "":
+		return errors.New("session_id is required")
 	case e.Timestamp.IsZero():
 		return errors.New("timestamp is required")
 	case e.AdapterName == "":
@@ -63,6 +67,14 @@ func (e ToolEvent) Validate() error {
 		return errors.New("tool_name is required")
 	case e.FunctionName == "":
 		return errors.New("function_name is required")
+	case e.DurationMS < 0:
+		return errors.New("duration_ms must not be negative")
+	case e.InputSize < 0:
+		return errors.New("input_size must not be negative")
+	case e.OutputSize < 0:
+		return errors.New("output_size must not be negative")
+	case e.RetryCount < 0:
+		return errors.New("retry_count must not be negative")
 	}
 	return nil
 }

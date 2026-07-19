@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -42,11 +43,11 @@ type MCPTransport interface {
 // StdioTransport implements MCPTransport by spawning a child process and
 // communicating over its stdin/stdout with newline-delimited JSON.
 type StdioTransport struct {
-	command string   // original command string (for logging)
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  io.ReadCloser
-	stderr  io.ReadCloser
+	serverCommand string
+	cmd           *exec.Cmd
+	stdin         io.WriteCloser
+	stdout        io.ReadCloser
+	stderr        io.ReadCloser
 
 	scanner *bufio.Scanner
 	writeMu sync.Mutex
@@ -76,10 +77,7 @@ func NewStdioTransport(mcpCmd string) (*StdioTransport, error) {
 
 	cmd := exec.Command(exe, args...)
 
-	return &StdioTransport{
-		command: mcpCmd,
-		cmd:     cmd,
-	}, nil
+	return &StdioTransport{serverCommand: filepath.Base(exe), cmd: cmd}, nil
 }
 
 // Start launches the child process and wires up stdin/stdout.
@@ -105,14 +103,14 @@ func (t *StdioTransport) Start(ctx context.Context) error {
 	}
 
 	if err := t.cmd.Start(); err != nil {
-		return fmt.Errorf("start mcp server %q: %w", t.command, err)
+		return fmt.Errorf("start mcp server %q: %w", t.serverCommand, err)
 	}
 
 	// Drain stderr in the background — MCP servers log diagnostics to stderr.
 	go func() {
 		scanner := bufio.NewScanner(t.stderr)
 		for scanner.Scan() {
-			slog.Default().With("component", "mcp_proxy", "server", t.command).Info("mcp_server_stderr", "msg", scanner.Text())
+			slog.Default().With("component", "mcp_proxy", "server", t.serverCommand).Info("mcp_server_stderr", "msg", scanner.Text())
 		}
 	}()
 
@@ -121,7 +119,7 @@ func (t *StdioTransport) Start(ctx context.Context) error {
 	t.scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 
 	t.started = true
-	slog.Default().With("component", "mcp_proxy", "server", t.command, "pid", t.cmd.Process.Pid).Info("mcp server started")
+	slog.Default().With("component", "mcp_proxy", "server", t.serverCommand, "pid", t.cmd.Process.Pid).Info("mcp server started")
 	return nil
 }
 
@@ -230,7 +228,7 @@ func (t *StdioTransport) Close() error {
 		}
 	}
 
-	slog.Default().With("component", "mcp_proxy", "server", t.command).Info("mcp transport closed")
+	slog.Default().With("component", "mcp_proxy", "server", t.serverCommand).Info("mcp transport closed")
 
 	if len(errs) > 0 {
 		return fmt.Errorf("close transport: %v", errs)
@@ -238,9 +236,9 @@ func (t *StdioTransport) Close() error {
 	return nil
 }
 
-// Command returns the original command string.
+// Command returns a safe executable label for the configured command.
 func (t *StdioTransport) Command() string {
-	return t.command
+	return t.serverCommand
 }
 
 // ensure json is available (used in the proxy).

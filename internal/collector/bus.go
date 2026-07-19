@@ -5,11 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/MIK-HEAL/TraceAI/internal/events"
 	"github.com/MIK-HEAL/TraceAI/internal/storage"
+)
+
+var (
+	ErrBusClosed = errors.New("collector bus is closed")
+	ErrQueueFull = errors.New("collector bus queue is full")
 )
 
 type Bus struct {
@@ -53,6 +59,10 @@ func (b *Bus) Start(ctx context.Context) error {
 	if b.runCtx != nil {
 		b.publishMu.Unlock()
 		return errors.New("bus already started")
+	}
+	if b.closed {
+		b.publishMu.Unlock()
+		return ErrBusClosed
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	b.runCtx = runCtx
@@ -101,23 +111,32 @@ func (b *Bus) Start(ctx context.Context) error {
 	return nil
 }
 
-func (b *Bus) Publish(event events.ToolEvent) {
+// Publish queues an event for asynchronous persistence. It never blocks the
+// caller; a full or closed queue is returned as an error so callers can choose
+// whether to retry, surface, or record the loss.
+func (b *Bus) Publish(event events.ToolEvent) error {
+	if err := event.Validate(); err != nil {
+		err = fmt.Errorf("invalid event: %w", err)
+		b.reportError(err)
+		return err
+	}
+
 	b.publishMu.Lock()
 	defer b.publishMu.Unlock()
 	if b.closed {
 		slog.Default().With("component", "collector").Warn("event dropped", "reason", "bus_closed", "event_id", event.EventID)
-		b.reportError(errors.New("bus is closed"))
-		return
+		b.reportError(ErrBusClosed)
+		return ErrBusClosed
 	}
+	event = event.Clone()
 	select {
 	case b.input <- event:
+		return nil
 	default:
-		select {
-		case b.input <- event:
-		default:
-			slog.Default().With("component", "collector").Warn("event dropped", "reason", "queue_full", "event_id", event.EventID, "queue_len", len(b.input), "queue_cap", cap(b.input))
-			b.reportError(errors.New("event dropped: bus queue full"))
-		}
+		err := fmt.Errorf("%w (capacity %d)", ErrQueueFull, cap(b.input))
+		slog.Default().With("component", "collector").Warn("event dropped", "reason", "queue_full", "event_id", event.EventID, "queue_len", len(b.input), "queue_cap", cap(b.input))
+		b.reportError(err)
+		return err
 	}
 }
 
@@ -184,9 +203,30 @@ func (b *Bus) insertWithRetry(ctx context.Context, event events.ToolEvent) error
 		if err == nil {
 			return nil
 		}
-		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+		if !isRetryableStorageError(err) {
+			return fmt.Errorf("persist event %s: %w", event.EventID, err)
+		}
+		delay := time.Duration(attempt+1) * 10 * time.Millisecond
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
 	}
 	return fmt.Errorf("failed to persist event %s after %d attempts: %w", event.EventID, b.maxRetries, err)
+}
+
+func isRetryableStorageError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, token := range []string{"validation", "required", "constraint", "foreign key", "syntax", "malformed", "storage closed"} {
+		if strings.Contains(message, token) {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *Bus) reportError(err error) {

@@ -33,8 +33,8 @@ func (s *SDK) Start(ctx context.Context) error {
 	return s.Collector.Start(ctx)
 }
 
-func (s *SDK) Publish(event events.ToolEvent) {
-	s.Collector.Publish(event)
+func (s *SDK) Publish(event events.ToolEvent) error {
+	return s.Collector.Publish(event)
 }
 
 func (s *SDK) Close(timeout time.Duration) error {
