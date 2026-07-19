@@ -115,6 +115,7 @@ func (b *Bus) Start(ctx context.Context) error {
 // caller; a full or closed queue is returned as an error so callers can choose
 // whether to retry, surface, or record the loss.
 func (b *Bus) Publish(event events.ToolEvent) error {
+	event = event.Normalize()
 	if err := event.Validate(); err != nil {
 		err = fmt.Errorf("invalid event: %w", err)
 		b.reportError(err)

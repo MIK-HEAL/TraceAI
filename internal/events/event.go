@@ -43,6 +43,7 @@ func NewToolEvent() ToolEvent {
 		TraceID:       newID("trc"),
 		SessionID:     newID("ses"),
 		Timestamp:     now,
+		AgentName:     "unknown",
 		Metadata:      map[string]interface{}{},
 	}
 }
@@ -59,6 +60,8 @@ func (e ToolEvent) Validate() error {
 		return errors.New("session_id is required")
 	case e.Timestamp.IsZero():
 		return errors.New("timestamp is required")
+	case e.AgentName == "":
+		return errors.New("agent_name is required")
 	case e.AdapterName == "":
 		return errors.New("adapter_name is required")
 	case e.ToolType == "":
@@ -86,6 +89,9 @@ func (e ToolEvent) Normalize() ToolEvent {
 	}
 	if clone.Metadata == nil {
 		clone.Metadata = map[string]interface{}{}
+	}
+	if clone.AgentName == "" {
+		clone.AgentName = "unknown"
 	}
 	return clone
 }

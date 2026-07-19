@@ -52,6 +52,7 @@ func (s *MemoryStorage) Ping(ctx context.Context) error {
 
 func (s *MemoryStorage) InsertEvent(ctx context.Context, event events.ToolEvent) error {
 	_ = ctx
+	event = event.Normalize()
 	if err := event.Validate(); err != nil {
 		slog.Default().With("component", "storage", "backend", "memory").Error("insert event failed", "event_id", event.EventID, "error", err)
 		return err
@@ -496,12 +497,12 @@ func (s *MemoryStorage) RetryPatterns(ctx context.Context, since time.Time, limi
 
 	// Aggregate patterns per tool.
 	type toolAgg struct {
-		totalCalls  int64
-		sessions    int64
-		neverFails  int64
-		alwaysFails int64
-		recovers    int64
-		degrades    int64
+		totalCalls   int64
+		sessions     int64
+		neverFails   int64
+		alwaysFails  int64
+		recovers     int64
+		degrades     int64
 		intermittent int64
 	}
 	agg := make(map[string]*toolAgg)

@@ -4,6 +4,7 @@
 .npm-cache/
 .tmp/
 .modcache/
+.omo/
 bin/
 dist/
 design/

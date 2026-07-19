@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -87,11 +88,15 @@ type MCPProxy struct {
 	agentName   string
 	serverTools []MCPTool // tools discovered from tools/list
 
-	pending map[string]*pendingCall // keyed by JSON-RPC id
-	mu      sync.Mutex
+	pending        map[string]*pendingCall // tools/call requests, keyed by JSON-RPC id
+	pendingMethods map[string]string       // control requests, keyed by JSON-RPC id
+	mu             sync.Mutex
 
-	done      chan struct{}
-	closeOnce sync.Once
+	input          io.ReadCloser
+	output         io.Writer
+	inputCloseOnce sync.Once
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 // NewMCPProxy creates a proxy that will launch cmd as the real MCP server.
@@ -105,6 +110,30 @@ func NewMCPProxy(cfg *MCPProxyConfig, col *collector.Collector) (*MCPProxy, erro
 	if err != nil {
 		return nil, fmt.Errorf("create stdio transport: %w", err)
 	}
+	return newMCPProxy(cfg, col, transport, os.Stdin, os.Stdout)
+}
+
+// NewMCPProxyWithTransport creates a proxy around a caller-supplied transport
+// and streams. It supports non-stdio transports and makes protocol handling
+// independently testable without launching a child process.
+func NewMCPProxyWithTransport(cfg *MCPProxyConfig, col *collector.Collector, transport MCPTransport, input io.ReadCloser, output io.Writer) (*MCPProxy, error) {
+	cfg = cfg.withDefaults()
+	return newMCPProxy(cfg, col, transport, input, output)
+}
+
+func newMCPProxy(cfg *MCPProxyConfig, col *collector.Collector, transport MCPTransport, input io.ReadCloser, output io.Writer) (*MCPProxy, error) {
+	if col == nil {
+		return nil, fmt.Errorf("collector is required")
+	}
+	if transport == nil {
+		return nil, fmt.Errorf("mcp transport is required")
+	}
+	if input == nil {
+		return nil, fmt.Errorf("proxy input is required")
+	}
+	if output == nil {
+		return nil, fmt.Errorf("proxy output is required")
+	}
 
 	sessionID := events.NewToolEvent().SessionID
 
@@ -116,7 +145,9 @@ func NewMCPProxy(cfg *MCPProxyConfig, col *collector.Collector) (*MCPProxy, erro
 		sessionID:      sessionID,
 		agentName:      cfg.AgentName,
 		pending:        make(map[string]*pendingCall),
-		done:           make(chan struct{}),
+		pendingMethods: make(map[string]string),
+		input:          input,
+		output:         output,
 	}
 
 	slog.Default().With("component", "mcp_proxy", "session_id", sessionID, "server_command", proxy.serverCommand).Info("proxy created")
@@ -142,33 +173,35 @@ func (p *MCPProxy) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// Goroutine 1: server → client (real MCP server stdout → os.Stdout)
+	readerDone := make(chan struct{}, 2)
+
+	// Goroutine 1: server → client (real MCP server stdout → proxy output)
 	go func() {
 		defer wg.Done()
 		p.serverReader(ctx)
+		readerDone <- struct{}{}
 	}()
 
-	// Goroutine 2: client → server (os.Stdin → real MCP server stdin)
+	// Goroutine 2: client → server (proxy input → real MCP server stdin)
 	go func() {
 		defer wg.Done()
 		p.clientReader(ctx)
+		readerDone <- struct{}{}
 	}()
 
-	// Wait for either context cancellation or both readers to exit.
-	doneCh := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(doneCh)
-	}()
-
+	// Either side ending terminates a proxy session. Closing both streams
+	// guarantees the opposite reader is unblocked before waiting for it.
 	select {
 	case <-ctx.Done():
 		slog.Default().With("component", "mcp_proxy").Info("proxy context cancelled")
-	case <-doneCh:
-		slog.Default().With("component", "mcp_proxy").Info("proxy readers exited")
+	case <-readerDone:
+		slog.Default().With("component", "mcp_proxy").Info("proxy reader exited")
 	}
 
 	cancel()
+	if err := p.Close(); err != nil {
+		slog.Default().With("component", "mcp_proxy").Warn("proxy close error", "error", err)
+	}
 	wg.Wait()
 
 	return nil
@@ -176,12 +209,17 @@ func (p *MCPProxy) Run(ctx context.Context) error {
 
 // Close shuts down the proxy and its transport.
 func (p *MCPProxy) Close() error {
-	var err error
 	p.closeOnce.Do(func() {
-		err = p.transport.Close()
-		close(p.done)
+		p.closeInput()
+		p.closeErr = p.transport.Close()
 	})
-	return err
+	return p.closeErr
+}
+
+func (p *MCPProxy) closeInput() {
+	p.inputCloseOnce.Do(func() {
+		_ = p.input.Close()
+	})
 }
 
 // SessionID returns the proxy's session identifier.
@@ -232,19 +270,10 @@ func (p *MCPProxy) serverReader(ctx context.Context) {
 			return
 		}
 
-		// Intercept responses to tools/call.
+		// Match responses with the request that produced them before deriving
+		// event or server metadata from their payload.
 		if msg.IsResponse() {
 			p.handleServerResponse(msg)
-		}
-
-		// Intercept initialize result to discover server identity.
-		if msg.IsResponse() && msg.Result != nil {
-			p.maybeCaptureInitialize(msg)
-		}
-
-		// Intercept tools/list result to capture the tool catalog.
-		if msg.IsResponse() && msg.Result != nil {
-			p.maybeCaptureToolsList(msg)
 		}
 
 		// Forward to client (os.Stdout).
@@ -255,11 +284,11 @@ func (p *MCPProxy) serverReader(ctx context.Context) {
 	}
 }
 
-// clientReader reads messages from os.Stdin (the AI agent) and forwards
+// clientReader reads messages from the configured input (the AI agent) and forwards
 // them to the real MCP server.  For tools/call requests it records the
 // start event metadata.
 func (p *MCPProxy) clientReader(ctx context.Context) {
-	scanner := newStdinScanner()
+	scanner := newInputScanner(p.input)
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
@@ -276,9 +305,13 @@ func (p *MCPProxy) clientReader(ctx context.Context) {
 			continue
 		}
 
-		// Intercept tools/call requests: record the start time.
-		if msg.IsRequest() && msg.Method == MCPMethodToolsCall {
-			p.handleToolsCallStart(msg)
+		if msg.IsRequest() {
+			switch msg.Method {
+			case MCPMethodToolsCall:
+				p.handleToolsCallStart(msg)
+			case MCPMethodInitialize, MCPMethodToolsList:
+				p.trackControlRequest(msg)
+			}
 		}
 
 		// Forward to real server.
@@ -288,7 +321,7 @@ func (p *MCPProxy) clientReader(ctx context.Context) {
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
+	if err := scanner.Err(); err != nil && ctx.Err() == nil {
 		slog.Default().With("component", "mcp_proxy", "direction", "client->server").Error("stdin read error", "error", err)
 	}
 }
@@ -318,6 +351,14 @@ func (p *MCPProxy) handleToolsCallStart(msg *JSONRPCMessage) {
 	slog.Default().With("component", "mcp_proxy", "tool", params.Name, "id", msg.IDString()).Debug("tools/call started")
 }
 
+func (p *MCPProxy) trackControlRequest(msg *JSONRPCMessage) {
+	if id := msg.IDString(); id != "" {
+		p.mu.Lock()
+		p.pendingMethods[id] = msg.Method
+		p.mu.Unlock()
+	}
+}
+
 // handleServerResponse processes a response from the real MCP server.
 // When it matches a pending tools/call, it builds and publishes a ToolEvent.
 func (p *MCPProxy) handleServerResponse(msg *JSONRPCMessage) {
@@ -331,12 +372,25 @@ func (p *MCPProxy) handleServerResponse(msg *JSONRPCMessage) {
 	if ok {
 		delete(p.pending, id)
 	}
+	method := p.pendingMethods[id]
+	delete(p.pendingMethods, id)
 	p.mu.Unlock()
 
-	if !ok {
-		return // not a tools/call we tracked (e.g. tools/list, initialize)
+	if ok {
+		p.publishToolCall(call, msg)
 	}
+	if msg.Result == nil {
+		return
+	}
+	switch method {
+	case MCPMethodInitialize:
+		p.maybeCaptureInitialize(msg)
+	case MCPMethodToolsList:
+		p.maybeCaptureToolsList(msg)
+	}
+}
 
+func (p *MCPProxy) publishToolCall(call *pendingCall, msg *JSONRPCMessage) {
 	now := time.Now().UTC()
 	durationMS := now.Sub(call.startTime).Milliseconds()
 
@@ -456,13 +510,13 @@ func (p *MCPProxy) maybeCaptureToolsList(msg *JSONRPCMessage) {
 // I/O helpers
 // ---------------------------------------------------------------------------
 
-// writeToClient writes a message to os.Stdout (newline-delimited JSON).
+// writeToClient writes a message to the configured output (newline-delimited JSON).
 func (p *MCPProxy) writeToClient(msg *JSONRPCMessage) error {
 	data, err := MarshalJSONRPCMessage(msg)
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Printf("%s\n", data)
+	_, err = fmt.Fprintf(p.output, "%s\n", data)
 	return err
 }
 
@@ -474,10 +528,10 @@ func (p *MCPProxy) forwardRawToServer(data []byte) {
 	}
 }
 
-// newStdinScanner returns a buffered scanner reading from os.Stdin.
+// newInputScanner returns a buffered scanner reading from a proxy input.
 // Uses a large buffer to handle big MCP messages.
-func newStdinScanner() *bufio.Scanner {
-	scanner := bufio.NewScanner(os.Stdin)
+func newInputScanner(input io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	return scanner
 }

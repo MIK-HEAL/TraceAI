@@ -123,6 +123,18 @@ func TestValidateEventRejectsMissingIdentityAndNegativeMetrics(t *testing.T) {
 	}
 }
 
+func TestEventNormalizationSuppliesUnknownAgent(t *testing.T) {
+	event := validEvent("search")
+	event.AgentName = ""
+	normalized := event.Normalize()
+	if normalized.AgentName != "unknown" {
+		t.Fatalf("expected unknown agent fallback, got %q", normalized.AgentName)
+	}
+	if err := normalized.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestConfigValidationRejectsSilentFallbacks(t *testing.T) {
 	cfg := &config.Config{Store: "sqlite", DB: "trace.db", LogLevel: "verbose", LogFormat: "text"}
 	if err := cfg.Validate(); err == nil {

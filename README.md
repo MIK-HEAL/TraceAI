@@ -246,7 +246,7 @@ Claude Code / Cursor / LangChain
 
 ## 附加集成（非主线）
 
-对于非 MCP 场景（OpenAI Function Calling、gRPC、HTTP API），TraceAI 也提供手动埋点 Adapter：
+对于非 MCP 场景（OpenAI Function Calling、gRPC、HTTP API），TraceAI 也提供手动埋点 API：
 
 ```go
 // HTTP 中间件
@@ -275,7 +275,7 @@ traceai.RecordFinish(ctx, err == nil, inputSize, outputSize, err)
 - [x] 调用序列分析
 - [x] 重试模式分析
 - [x] 零调用 / 高失败率工具检测
-- [x] MCP 协议细节收敛在 Adapter 层
+- [x] MCP 协议细节收敛在透明 Proxy 层
 
 **之前版本已完成的：**
 - 统一事件模型、SQLite 存储、事件总线

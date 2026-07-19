@@ -96,6 +96,7 @@ func (s *SQLiteStorage) Ping(ctx context.Context) error {
 }
 
 func (s *SQLiteStorage) InsertEvent(ctx context.Context, event events.ToolEvent) error {
+	event = event.Normalize()
 	if err := event.Validate(); err != nil {
 		slog.Default().With("component", "storage", "backend", "sqlite").Error("insert event failed", "event_id", event.EventID, "error", err)
 		return err
@@ -509,6 +510,11 @@ func (s *SQLiteStorage) topCounts(ctx context.Context, since time.Time, limit in
 	defer s.mu.RUnlock()
 	if s.db == nil {
 		return nil, fmt.Errorf("storage not initialized")
+	}
+	switch column {
+	case "tool_name", "function_name", "agent_name":
+	default:
+		return nil, fmt.Errorf("unsupported aggregation column %q", column)
 	}
 	where, args := sinceClause(since)
 	limitClause := ""
