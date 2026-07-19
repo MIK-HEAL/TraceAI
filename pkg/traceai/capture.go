@@ -8,6 +8,8 @@ import (
 )
 
 type CallInfo struct {
+	TraceID        string
+	SessionID      string
 	AdapterName    string
 	AdapterVersion string
 	AgentName      string
@@ -21,6 +23,12 @@ type CallInfo struct {
 func (i CallInfo) Start() models.ToolEvent {
 	event := events.NewToolEvent()
 	event.Timestamp = time.Now().UTC()
+	if i.TraceID != "" {
+		event.TraceID = i.TraceID
+	}
+	if i.SessionID != "" {
+		event.SessionID = i.SessionID
+	}
 	event.AdapterName = i.AdapterName
 	event.AdapterVersion = i.AdapterVersion
 	event.AgentName = i.AgentName

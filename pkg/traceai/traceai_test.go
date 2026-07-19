@@ -159,6 +159,8 @@ func TestInterceptorWrapHTTPMapsSemanticFields(t *testing.T) {
 	interceptor := Interceptor{
 		Client: client,
 		Info: CallInfo{
+			TraceID:      "trc_http",
+			SessionID:    "ses_http",
 			AdapterName:  "http",
 			AgentName:    "demo-agent",
 			ToolType:     "http",
@@ -186,6 +188,9 @@ func TestInterceptorWrapHTTPMapsSemanticFields(t *testing.T) {
 	}
 	if event.FunctionName != "GET /health" {
 		t.Fatalf("unexpected function name: %q", event.FunctionName)
+	}
+	if event.TraceID != "trc_http" || event.SessionID != "ses_http" {
+		t.Fatalf("legacy interceptor lost correlation IDs: %+v", event)
 	}
 	if !event.Success {
 		t.Fatal("expected success event")

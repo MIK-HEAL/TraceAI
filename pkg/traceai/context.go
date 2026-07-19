@@ -93,11 +93,24 @@ func (e HTTPStatusError) StatusCode() int {
 	return e.Status
 }
 
+// ErrorDetails lets instrumentation classify telemetry without changing the
+// application error returned to the caller.
+type ErrorDetails interface {
+	TraceAIError() (errorType, errorCode string)
+}
+
 func classifyError(err error) (string, string, string) {
 	if err == nil {
 		return "", "", ""
 	}
 	message := err.Error()
+	var detailed ErrorDetails
+	if errors.As(err, &detailed) {
+		errorType, errorCode := detailed.TraceAIError()
+		if errorType != "" || errorCode != "" {
+			return errorType, errorCode, message
+		}
+	}
 	switch {
 	case errors.Is(err, context.Canceled):
 		return "context_error", "context_canceled", message

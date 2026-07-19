@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/MIK-HEAL/TraceAI/pkg/instrumentation/anthropic"
 	"github.com/MIK-HEAL/TraceAI/pkg/instrumentation/httptransport"
-	"github.com/MIK-HEAL/TraceAI/pkg/instrumentation/openai"
 	"github.com/MIK-HEAL/TraceAI/pkg/instrumentation/provider"
 	"github.com/MIK-HEAL/TraceAI/pkg/instrumentation/tool"
 	"github.com/MIK-HEAL/TraceAI/pkg/traceai"
@@ -25,41 +25,40 @@ func main() {
 	modelClient := &http.Client{Transport: httptransport.NewTransport(
 		http.DefaultTransport,
 		registry,
-		openai.NewAdapter(openai.Config{ToolNamespaces: map[string]string{
-			"create_issue": "github",
+		anthropic.NewAdapter(anthropic.Config{ToolNamespaces: map[string]string{
+			"search_docs": "knowledge",
 		}}),
 	)}
-	_ = modelClient // Pass this client to the OpenAI SDK or compatible HTTP client.
+	_ = modelClient // Pass this client to the Anthropic SDK or compatible HTTP client.
 
-	// In a real response, the transport registers this context by tool_call_id.
 	registry.Record(ctx, []provider.ToolDecision{{
 		EventID:      "decision_demo",
 		TraceID:      "trc_demo",
 		SessionID:    "ses_demo",
 		RequestID:    "req_demo",
-		ToolCallID:   "call_create_issue",
-		ProviderName: "openai",
-		ModelName:    "gpt-4.1",
-		APIFamily:    "chat-completions",
-		AdapterName:  "openai-chat-completions",
-		AgentName:    "cursor",
-		ToolName:     "github",
-		FunctionName: "create_issue",
+		ToolCallID:   "toolu_search_docs",
+		ProviderName: "anthropic",
+		ModelName:    "claude-sonnet-4-5",
+		APIFamily:    "messages",
+		AdapterName:  "anthropic-messages",
+		AgentName:    "research-agent",
+		ToolName:     "knowledge",
+		FunctionName: "search_docs",
 	}})
-	decision, ok := registry.Take("call_create_issue")
+	decision, ok := registry.Take("toolu_search_docs")
 	if !ok {
 		panic("tool decision not captured")
 	}
 
-	createIssue := tool.Wrap(decision, client, func(_ context.Context, input map[string]string) (map[string]string, error) {
-		return map[string]string{"issue": input["title"]}, nil
+	searchDocs := tool.Wrap(decision, client, func(_ context.Context, input map[string]string) ([]string, error) {
+		return []string{"matched: " + input["query"]}, nil
 	})
-	if _, err := createIssue(ctx, map[string]string{"title": "TraceAI example"}); err != nil {
+	if _, err := searchDocs(ctx, map[string]string{"query": "retention policy"}); err != nil {
 		panic(err)
 	}
 	stats, err := client.Stats(ctx, time.Time{})
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("openai execution stats: %+v\n", stats)
+	fmt.Printf("anthropic execution stats: %+v\n", stats)
 }

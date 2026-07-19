@@ -20,6 +20,8 @@ func (i Interceptor) Record(success bool, inputSize, outputSize int64, err error
 
 func (i Interceptor) WrapHTTP(next http.Handler, toolType, toolName, functionName string) http.Handler {
 	return HTTPMiddleware(i.Client, CallInfo{
+		TraceID:        i.Info.TraceID,
+		SessionID:      i.Info.SessionID,
 		AdapterName:    i.Info.AdapterName,
 		AdapterVersion: i.Info.AdapterVersion,
 		AgentName:      i.Info.AgentName,
@@ -33,6 +35,8 @@ func (i Interceptor) WrapHTTP(next http.Handler, toolType, toolName, functionNam
 
 func (i Interceptor) CaptureRPC(ctx context.Context, toolType, toolName, functionName string, fn func(context.Context) (int64, int64, error)) error {
 	return CaptureRPC(ctx, i.Client, CallInfo{
+		TraceID:        i.Info.TraceID,
+		SessionID:      i.Info.SessionID,
 		AdapterName:    i.Info.AdapterName,
 		AdapterVersion: i.Info.AdapterVersion,
 		AgentName:      i.Info.AgentName,
@@ -48,6 +52,8 @@ func (i Interceptor) WrapMCP(agentName, toolName, functionName string) func(func
 	return func(next func() error) func() error {
 		return func() error {
 			return WrapMCP(i.Client, CallInfo{
+				TraceID:        i.Info.TraceID,
+				SessionID:      i.Info.SessionID,
 				AdapterName:    i.Info.AdapterName,
 				AdapterVersion: i.Info.AdapterVersion,
 				AgentName:      agentName,
