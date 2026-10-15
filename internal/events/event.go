@@ -16,6 +16,10 @@ type ToolEvent struct {
 	SchemaVersion  string                 `json:"schema_version"`
 	TraceID        string                 `json:"trace_id"`
 	SessionID      string                 `json:"session_id"`
+	RequestID      string                 `json:"request_id,omitempty"`
+	CallID         string                 `json:"call_id,omitempty"`
+	ParentEventID  string                 `json:"parent_event_id,omitempty"`
+	Attempt        int64                  `json:"attempt,omitempty"`
 	Timestamp      time.Time              `json:"timestamp"`
 	AgentName      string                 `json:"agent_name"`
 	AgentVersion   string                 `json:"agent_version"`
@@ -78,6 +82,8 @@ func (e ToolEvent) Validate() error {
 		return errors.New("output_size must not be negative")
 	case e.RetryCount < 0:
 		return errors.New("retry_count must not be negative")
+	case e.Attempt < 0:
+		return errors.New("attempt must not be negative")
 	}
 	return nil
 }

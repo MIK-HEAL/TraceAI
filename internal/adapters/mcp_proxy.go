@@ -14,6 +14,7 @@ import (
 
 	"github.com/MIK-HEAL/TraceAI/internal/collector"
 	"github.com/MIK-HEAL/TraceAI/internal/events"
+	"github.com/MIK-HEAL/TraceAI/internal/storage"
 )
 
 // ---------------------------------------------------------------------------
@@ -59,6 +60,7 @@ func (c *MCPProxyConfig) withDefaults() *MCPProxyConfig {
 
 // pendingCall holds the start-time metadata for an in-flight tools/call.
 type pendingCall struct {
+	requestID   string
 	toolName    string
 	startTime   time.Time
 	requestSize int64
@@ -199,12 +201,27 @@ func (p *MCPProxy) Run(ctx context.Context) error {
 	}
 
 	cancel()
+	p.finishPending("timeout_error", "proxy_closed", "MCP proxy stopped before a response was received")
 	if err := p.Close(); err != nil {
 		slog.Default().With("component", "mcp_proxy").Warn("proxy close error", "error", err)
 	}
 	wg.Wait()
 
 	return nil
+}
+
+func (p *MCPProxy) finishPending(errorType, errorCode, message string) {
+	p.mu.Lock()
+	pending := make([]*pendingCall, 0, len(p.pending))
+	for id, call := range p.pending {
+		delete(p.pending, id)
+		pending = append(pending, call)
+	}
+	p.mu.Unlock()
+	for _, call := range pending {
+		msg := &JSONRPCMessage{Error: &JSONRPCError{Code: -32001, Message: message}}
+		p.publishToolCallWithError(call, msg, errorType, errorCode, message)
+	}
 }
 
 // Close shuts down the proxy and its transport.
@@ -342,6 +359,7 @@ func (p *MCPProxy) handleToolsCallStart(msg *JSONRPCMessage) {
 
 	p.mu.Lock()
 	p.pending[msg.IDString()] = &pendingCall{
+		requestID:   msg.IDString(),
 		toolName:    params.Name,
 		startTime:   time.Now().UTC(),
 		requestSize: reqSize,
@@ -391,6 +409,10 @@ func (p *MCPProxy) handleServerResponse(msg *JSONRPCMessage) {
 }
 
 func (p *MCPProxy) publishToolCall(call *pendingCall, msg *JSONRPCMessage) {
+	p.publishToolCallWithError(call, msg, "", "", "")
+}
+
+func (p *MCPProxy) publishToolCallWithError(call *pendingCall, msg *JSONRPCMessage, forcedType, forcedCode, forcedMessage string) {
 	now := time.Now().UTC()
 	durationMS := now.Sub(call.startTime).Milliseconds()
 
@@ -405,6 +427,8 @@ func (p *MCPProxy) publishToolCall(call *pendingCall, msg *JSONRPCMessage) {
 	event := events.NewToolEvent()
 	event.Timestamp = call.startTime
 	event.SessionID = p.sessionID
+	event.RequestID = call.requestID
+	event.CallID = call.requestID
 	event.AdapterName = "mcp"
 	event.AdapterVersion = p.adapterVersion
 	p.mu.Lock()
@@ -422,8 +446,11 @@ func (p *MCPProxy) publishToolCall(call *pendingCall, msg *JSONRPCMessage) {
 
 	if !success {
 		event.ErrorType = ClassifyJSONRPCError(msg.Error.Code)
-		event.ErrorCode = fmt.Sprintf("%d", msg.Error.Code)
+		event.ErrorCode = JSONRPCErrorCode(msg.Error.Code)
 		event.ErrorMessage = msg.Error.Message
+	}
+	if forcedType != "" {
+		event.ErrorType, event.ErrorCode, event.ErrorMessage = forcedType, forcedCode, forcedMessage
 	}
 
 	// Attach MCP metadata.
@@ -501,7 +528,15 @@ func (p *MCPProxy) maybeCaptureToolsList(msg *JSONRPCMessage) {
 
 	p.mu.Lock()
 	p.serverTools = result.Tools
+	serverName := p.serverName
 	p.mu.Unlock()
+	catalog := make([]storage.CatalogTool, 0, len(result.Tools))
+	for _, tool := range result.Tools {
+		catalog = append(catalog, storage.CatalogTool{Name: tool.Name, Description: tool.Description})
+	}
+	if err := p.collector.RecordToolCatalog(context.Background(), p.sessionID, serverName, catalog); err != nil {
+		slog.Default().With("component", "mcp_proxy", "error", err).Warn("tool catalog persistence failed")
+	}
 
 	slog.Default().With("component", "mcp_proxy", "tool_count", len(result.Tools)).Info("tools/list captured")
 }

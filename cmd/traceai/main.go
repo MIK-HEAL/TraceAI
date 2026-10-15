@@ -64,7 +64,7 @@ func run(argv []string, out io.Writer) error {
 	var engine *analytics.Engine
 	if commandNeedsStorage(args[0]) {
 		var err error
-		store, err = storage.New(storage.Config{Backend: cfg.Store, Path: cfg.DB})
+		store, err = storage.New(storage.Config{Backend: cfg.Store, Path: cfg.DB, CaptureMode: storage.CaptureMode(cfg.CaptureMode), RetentionDays: cfg.RetentionDays, MaxBytes: cfg.MaxDBBytes})
 		if err != nil {
 			return wrapError("create storage", err)
 		}
@@ -116,6 +116,15 @@ func run(argv []string, out io.Writer) error {
 		return runZeroCalls(engine, args[1:], out)
 	case "high-failures":
 		return runHighFailures(engine, args[1:], out)
+	case "cleanup":
+		if cleaner, ok := store.(interface{ Prune(context.Context) error }); ok {
+			if err := cleaner.Prune(context.Background()); err != nil {
+				return err
+			}
+			_, err := fmt.Fprintln(out, "retention cleanup complete")
+			return err
+		}
+		return errors.New("cleanup requires sqlite storage")
 	default:
 		printUsage(out)
 		return nil
@@ -124,7 +133,7 @@ func run(argv []string, out io.Writer) error {
 
 func commandNeedsStorage(command string) bool {
 	switch command {
-	case "top-tools", "top-functions", "top-agents", "stats", "report", "dashboard", "status", "health", "metrics", "export", "seed-demo", "mcp", "call-seq", "retry-patterns", "zero-calls", "high-failures":
+	case "top-tools", "top-functions", "top-agents", "stats", "report", "dashboard", "status", "health", "metrics", "export", "seed-demo", "mcp", "call-seq", "retry-patterns", "zero-calls", "high-failures", "cleanup":
 		return true
 	case "version":
 		return false
@@ -628,6 +637,7 @@ Usage:
 	  traceai [--store sqlite|memory] [--db path] retry-patterns [--limit n]
 	  traceai [--store sqlite|memory] [--db path] zero-calls --catalog path|tool1,tool2
 	  traceai [--store sqlite|memory] [--db path] high-failures [--threshold 0.3] [--limit n]
+  traceai [--retention-days n] [--max-db-bytes n] cleanup
   traceai [--store sqlite|memory] [--db path] top-tools
   traceai [--store sqlite|memory] [--db path] top-functions
   traceai [--store sqlite|memory] [--db path] top-agents

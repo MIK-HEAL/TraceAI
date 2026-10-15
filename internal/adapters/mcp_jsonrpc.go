@@ -74,15 +74,15 @@ func (m *JSONRPCMessage) IsError() bool {
 
 // MCP method names as defined by the Model Context Protocol specification.
 const (
-	MCPMethodInitialize     = "initialize"
-	MCPMethodInitialized    = "notifications/initialized"
-	MCPMethodToolsList      = "tools/list"
-	MCPMethodToolsCall      = "tools/call"
+	MCPMethodInitialize       = "initialize"
+	MCPMethodInitialized      = "notifications/initialized"
+	MCPMethodToolsList        = "tools/list"
+	MCPMethodToolsCall        = "tools/call"
 	MCPMethodToolsListChanged = "notifications/tools/list_changed"
-	MCPMethodResourcesList  = "resources/list"
-	MCPMethodResourcesRead  = "resources/read"
-	MCPMethodPromptsList    = "prompts/list"
-	MCPMethodPromptsGet     = "prompts/get"
+	MCPMethodResourcesList    = "resources/list"
+	MCPMethodResourcesRead    = "resources/read"
+	MCPMethodPromptsList      = "prompts/list"
+	MCPMethodPromptsGet       = "prompts/get"
 )
 
 // ---------------------------------------------------------------------------
@@ -97,9 +97,9 @@ type MCPToolCallParams struct {
 
 // MCPInitializeResult is the result shape for an initialize response.
 type MCPInitializeResult struct {
-	ProtocolVersion string                 `json:"protocolVersion"`
-	ServerInfo      MCPServerInfo          `json:"serverInfo"`
-	Capabilities    MCPServerCapabilities  `json:"capabilities"`
+	ProtocolVersion string                `json:"protocolVersion"`
+	ServerInfo      MCPServerInfo         `json:"serverInfo"`
+	Capabilities    MCPServerCapabilities `json:"capabilities"`
 }
 
 // MCPServerInfo carries the server identity returned during initialize.
@@ -184,6 +184,12 @@ func ParseToolsListResult(msg *JSONRPCMessage) (*MCPToolsListResult, error) {
 // ClassifyJSONRPCError maps a JSON-RPC error code to a human-readable
 // error type string suitable for ToolEvent.ErrorType.
 func ClassifyJSONRPCError(code int) string {
+	// Keep the stable top-level taxonomy in ErrorType while retaining the
+	// protocol-specific reason in ErrorCode.
+	return "protocol_error"
+}
+
+func JSONRPCErrorCode(code int) string {
 	switch code {
 	case -32700:
 		return "jsonrpc_parse_error"

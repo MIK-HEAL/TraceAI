@@ -48,7 +48,7 @@ GitHub MCP
 | 本地 Web Dashboard | 可用 | 查看工具、Agent 和错误分析 |
 | OpenAI 原生 Function Calling | 可用 | Responses / Chat Completions 非流式 Provider Capture + 真实执行关联 |
 | Anthropic Tool Use | 可用 | Messages 非流式 Provider Capture + 真实执行关联 |
-| OpenAI / Anthropic 流式采集 | 规划中 | 需要按 tool call ID 聚合流式参数片段 |
+| OpenAI / Anthropic 流式采集 | 可用 | 按 tool call ID 聚合流式参数片段 |
 | npm CLI 发布 | 可用 | `@clonap4d/traceai` 安装 wrapper，并按平台下载 GitHub Release 二进制 |
 | Python 注册表发布 | 准备中 | Python wrapper 已在 `distribution/python/`，PyPI 发布仍待完成 |
 
@@ -249,7 +249,7 @@ Provider Adapter                     Tool Executor Wrapper
 - 工具执行失败是参数、调度、超时还是业务错误。
 - 模型选择工具与工具真实成功率之间的差异。
 
-当前已实现 OpenAI Responses / Chat Completions 与 Anthropic Messages 的非流式 Provider Adapter。将 Provider-aware HTTP Transport 注入 SDK 的 HTTP Client，再将 registry.Take(toolCallID) 得到的上下文传给 Tool Executor Wrapper，即可在工具真正执行后记录成功、耗时和输入输出大小。完整示例见 [OpenAI](examples/openai/main.go)、[Anthropic](examples/anthropic/main.go) 和 [接入说明](docs/integration.md)。
+当前已实现 OpenAI Responses / Chat Completions 与 Anthropic Messages 的非流式和流式 Provider Adapter。将 Provider-aware HTTP Transport 注入 SDK 的 HTTP Client，再将 registry.Take(toolCallID) 得到的上下文传给 Tool Executor Wrapper，即可在工具真正执行后记录成功、耗时和输入输出大小。完整示例见 [OpenAI](examples/openai/main.go)、[Anthropic](examples/anthropic/main.go) 和 [接入说明](docs/integration.md)。
 
 ## 分析命令
 

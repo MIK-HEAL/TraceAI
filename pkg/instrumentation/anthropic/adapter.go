@@ -1,4 +1,4 @@
-// Package anthropic observes non-streaming Anthropic Messages tool-use responses.
+// Package anthropic observes Anthropic Messages tool-use responses, including SSE streams.
 package anthropic
 
 import (
@@ -85,7 +85,7 @@ func (a *Adapter) ObserveRequest(request *http.Request) (provider.RequestContext
 }
 
 func (a *Adapter) ObserveResponse(request provider.RequestContext, response *http.Response) ([]provider.ToolDecision, error) {
-	if response == nil || request.Streaming || isStreaming(response) || response.StatusCode < 200 || response.StatusCode >= 300 {
+	if response == nil || response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, nil
 	}
 	body, complete, err := provider.ReadResponseBody(response, a.maxBodyBytes)
@@ -94,6 +94,9 @@ func (a *Adapter) ObserveResponse(request provider.RequestContext, response *htt
 	}
 	if !complete {
 		return nil, nil
+	}
+	if request.Streaming || isStreaming(response) {
+		return parseStreaming(request, response, body)
 	}
 	var payload struct {
 		ID      string `json:"id"`
@@ -126,6 +129,72 @@ func (a *Adapter) ObserveResponse(request provider.RequestContext, response *htt
 			toolCallID = request.RequestID + "-tool-" + strconv.Itoa(index)
 		}
 		decisions = append(decisions, provider.NewDecision(request, toolCallID, content.Name, int64(len(content.Input))))
+	}
+	return decisions, nil
+}
+
+func parseStreaming(request provider.RequestContext, response *http.Response, body []byte) ([]provider.ToolDecision, error) {
+	frames, _ := provider.ParseSSEJSON(body)
+	type call struct{ id, name, args string }
+	calls := map[int]*call{}
+	var responseID, model string
+	for _, raw := range frames {
+		var frame struct {
+			Type    string `json:"type"`
+			Message struct {
+				ID    string `json:"id"`
+				Model string `json:"model"`
+			} `json:"message"`
+			Index        int `json:"index"`
+			ContentBlock struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"content_block"`
+			Delta struct {
+				Type        string `json:"type"`
+				PartialJSON string `json:"partial_json"`
+			} `json:"delta"`
+		}
+		if json.Unmarshal(raw, &frame) != nil {
+			continue
+		}
+		if frame.Message.ID != "" {
+			responseID = frame.Message.ID
+		}
+		if frame.Message.Model != "" {
+			model = frame.Message.Model
+		}
+		if frame.Type == "content_block_start" && frame.ContentBlock.Type == "tool_use" {
+			calls[frame.Index] = &call{id: frame.ContentBlock.ID, name: frame.ContentBlock.Name}
+		}
+		if frame.Type == "content_block_delta" && frame.Delta.Type == "input_json_delta" {
+			if calls[frame.Index] == nil {
+				calls[frame.Index] = &call{}
+			}
+			calls[frame.Index].args += frame.Delta.PartialJSON
+		}
+	}
+	requestID := response.Header.Get("request-id")
+	if requestID != "" {
+		request.RequestID = requestID
+	} else if responseID != "" {
+		request.RequestID = responseID
+	}
+	if model != "" {
+		request.ModelName = model
+	}
+	decisions := make([]provider.ToolDecision, 0, len(calls))
+	for i := 0; i < len(calls); i++ {
+		c := calls[i]
+		if c == nil || c.name == "" {
+			continue
+		}
+		id := c.id
+		if id == "" {
+			id = request.RequestID + "-tool-" + strconv.Itoa(i)
+		}
+		decisions = append(decisions, provider.NewDecision(request, id, c.name, int64(len(c.args))))
 	}
 	return decisions, nil
 }

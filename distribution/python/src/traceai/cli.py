@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import platform
 import shutil
 import subprocess
@@ -48,6 +49,22 @@ def binary_url() -> str:
     return f"{release_base_url()}/v{__version__}/{asset_name()}"
 
 
+def checksum_url() -> str:
+    return os.environ.get("TRACEAI_CHECKSUM_URL", f"{release_base_url()}/v{__version__}/SHA256SUMS")
+
+
+def checksum_for_asset(manifest: str, name: str) -> str:
+    for line in manifest.splitlines():
+        fields = line.strip().split()
+        if len(fields) >= 2 and len(fields[0]) == 64 and fields[1].lstrip("*") == name:
+            try:
+                int(fields[0], 16)
+            except ValueError:
+                continue
+            return fields[0].lower()
+    return ""
+
+
 def cache_dir() -> Path:
     root = os.environ.get("TRACEAI_CACHE_DIR")
     if root:
@@ -63,16 +80,36 @@ def binary_path() -> Path:
 
 def ensure_binary() -> Path:
     target = binary_path()
-    if target.exists():
-        return target
+    marker = target.with_suffix(target.suffix + ".sha256")
+    if target.exists() and marker.exists():
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        if digest == marker.read_text(encoding="utf-8").strip().lower():
+            return target
+        target.unlink(missing_ok=True)
 
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_suffix(target.suffix + ".download")
-    with urlopen(binary_url()) as response, temp.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
+    checksum_temp = target.with_name(target.name + ".download.sha256")
+    try:
+        with urlopen(binary_url()) as response, temp.open("wb") as handle:
+            shutil.copyfileobj(response, handle)
+        with urlopen(checksum_url()) as response, checksum_temp.open("wb") as handle:
+            shutil.copyfileobj(response, handle)
+        expected = checksum_for_asset(checksum_temp.read_text(encoding="utf-8"), asset_name())
+        if not expected:
+            raise RuntimeError(f"checksum for {asset_name()} not found in SHA256SUMS")
+        digest = hashlib.sha256(temp.read_bytes()).hexdigest()
+        if digest != expected:
+            raise RuntimeError(f"SHA256 mismatch for {asset_name()}")
+        temp.replace(target)
+        marker.write_text(expected, encoding="utf-8")
+    finally:
+        temp.unlink(missing_ok=True)
+        checksum_temp.unlink(missing_ok=True)
     if os.name != "nt":
-        temp.chmod(0o755)
-    temp.replace(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        target.chmod(0o755)
     return target
 
 

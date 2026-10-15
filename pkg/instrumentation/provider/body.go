@@ -2,8 +2,10 @@ package provider
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 )
 
 const DefaultMaxBodyBytes int64 = 1 << 20
@@ -39,8 +41,31 @@ func ReadRequestBody(request *http.Request, maxBytes int64) ([]byte, bool, error
 	return nil, false, nil
 }
 
+// ParseSSEJSON extracts JSON data frames from a Server-Sent Events response.
+// Keep this provider-neutral because OpenAI and Anthropic use the same wire
+// framing while differing only in their event payloads.
+func ParseSSEJSON(body []byte) ([]json.RawMessage, error) {
+	var frames []json.RawMessage
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		var raw json.RawMessage
+		if err := json.Unmarshal([]byte(data), &raw); err != nil {
+			continue
+		}
+		frames = append(frames, raw)
+	}
+	return frames, nil
+}
+
 // ReadResponseBody reads a bounded response prefix and restores the response
-// stream for the caller. Oversized and streaming bodies are left unparsed.
+// stream for the caller. Adapters may parse the returned bytes as JSON or SSE.
 func ReadResponseBody(response *http.Response, maxBytes int64) ([]byte, bool, error) {
 	if response == nil || response.Body == nil {
 		return nil, true, nil

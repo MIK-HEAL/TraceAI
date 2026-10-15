@@ -9,20 +9,24 @@ import (
 )
 
 type Config struct {
-	Store      string
-	DB         string
-	ConfigPath string
-	LogLevel   string
-	LogFormat  string
+	Store         string
+	DB            string
+	ConfigPath    string
+	LogLevel      string
+	LogFormat     string
+	CaptureMode   string
+	RetentionDays int
+	MaxDBBytes    int64
 }
 
 func Load(fs *flag.FlagSet) *Config {
 	cfg := &Config{
-		Store:      envOrDefault("TRACEAI_STORE", "sqlite"),
-		DB:         envOrDefault("TRACEAI_DB", "traceai.db"),
-		ConfigPath: envOrDefault("TRACEAI_CONFIG", ""),
-		LogLevel:   envOrDefault("TRACEAI_LOG_LEVEL", "info"),
-		LogFormat:  envOrDefault("TRACEAI_LOG_FORMAT", "text"),
+		Store:       envOrDefault("TRACEAI_STORE", "sqlite"),
+		DB:          envOrDefault("TRACEAI_DB", "traceai.db"),
+		ConfigPath:  envOrDefault("TRACEAI_CONFIG", ""),
+		LogLevel:    envOrDefault("TRACEAI_LOG_LEVEL", "info"),
+		LogFormat:   envOrDefault("TRACEAI_LOG_FORMAT", "text"),
+		CaptureMode: envOrDefault("TRACEAI_CAPTURE_MODE", "redacted"),
 	}
 	if fs != nil {
 		fs.StringVar(&cfg.Store, "store", cfg.Store, "storage backend: sqlite or memory")
@@ -30,6 +34,9 @@ func Load(fs *flag.FlagSet) *Config {
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "config file path")
 		fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level: debug, info, warn, error")
 		fs.StringVar(&cfg.LogFormat, "log-format", cfg.LogFormat, "log format: text or json")
+		fs.StringVar(&cfg.CaptureMode, "capture-mode", cfg.CaptureMode, "capture mode: metadata-only, redacted, or full-payload")
+		fs.IntVar(&cfg.RetentionDays, "retention-days", cfg.RetentionDays, "delete events older than N days (0 disables)")
+		fs.Int64Var(&cfg.MaxDBBytes, "max-db-bytes", cfg.MaxDBBytes, "maximum SQLite size after pruning (0 disables)")
 	}
 	return cfg
 }
@@ -63,6 +70,15 @@ func ApplyFile(fs *flag.FlagSet, cfg *Config) error {
 	}
 	if !visited["log-format"] && strings.TrimSpace(fileCfg.LogFormat) != "" {
 		cfg.LogFormat = fileCfg.LogFormat
+	}
+	if !visited["capture-mode"] && strings.TrimSpace(fileCfg.CaptureMode) != "" {
+		cfg.CaptureMode = fileCfg.CaptureMode
+	}
+	if !visited["retention-days"] {
+		cfg.RetentionDays = fileCfg.RetentionDays
+	}
+	if !visited["max-db-bytes"] {
+		cfg.MaxDBBytes = fileCfg.MaxDBBytes
 	}
 	return nil
 }
@@ -99,6 +115,21 @@ func (c *Config) Validate() error {
 	case "text", "json":
 	default:
 		return fmt.Errorf("unsupported log format %q (expected text or json)", c.LogFormat)
+	}
+	c.CaptureMode = strings.ToLower(strings.TrimSpace(c.CaptureMode))
+	if c.CaptureMode == "" {
+		c.CaptureMode = "redacted"
+	}
+	switch c.CaptureMode {
+	case "metadata-only", "redacted", "full-payload":
+	default:
+		return fmt.Errorf("unsupported capture mode %q", c.CaptureMode)
+	}
+	if c.RetentionDays < 0 {
+		return fmt.Errorf("retention days must not be negative")
+	}
+	if c.MaxDBBytes < 0 {
+		return fmt.Errorf("max db bytes must not be negative")
 	}
 	return nil
 }

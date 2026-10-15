@@ -79,7 +79,10 @@ Provider metadata stores no Prompt, API Key, original arguments, or tool result:
 - traceai.tool.call_id
 - traceai.tool.parent_event_id
 
-The first version supports OpenAI Responses / Chat Completions and Anthropic Messages non-streaming responses. Streaming aggregation is intentionally deferred.
+OpenAI Responses / Chat Completions and Anthropic Messages support both regular and
+SSE streaming responses. Stream fragments are grouped by provider tool-call ID and
+only sizes and stable identifiers are persisted; argument contents remain subject
+to the configured capture mode.
 
 ## 导出
 
@@ -93,3 +96,12 @@ The first version supports OpenAI Responses / Chat Completions and Anthropic Mes
 - [MCP 示例](../examples/mcp/main.go)
 - [OpenAI 示例](../examples/openai/main.go)
 - [Anthropic 示例](../examples/anthropic/main.go)
+# 10 分钟首次接入
+
+1. 安装 `@clonap4d/traceai`（或 Python wrapper），确认 `traceai version` 可运行。
+2. 用 `traceai mcp proxy --mcp-cmd "<your server command>"` 替换 MCP client 的 server command。
+3. 运行一次 `tools/list` 和一个 `tools/call`，再执行 `traceai report --catalog <tool-catalog>`。
+4. 在 `traceai dashboard` 的 Tools 页面查看调用率、成功率、重试、平均耗时和零调用工具。
+
+默认使用 `redacted` 采集模式；真实环境可按需设置 `--capture-mode metadata-only`、
+`--retention-days` 和 `--max-db-bytes`。

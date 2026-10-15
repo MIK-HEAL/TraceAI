@@ -14,9 +14,10 @@ import (
 )
 
 type MemoryStorage struct {
-	mu     sync.RWMutex
-	events []events.ToolEvent
-	closed bool
+	mu      sync.RWMutex
+	events  []events.ToolEvent
+	catalog map[string]map[string]CatalogTool
+	closed  bool
 }
 
 func NewMemoryStorage() *MemoryStorage {
@@ -29,7 +30,93 @@ func (s *MemoryStorage) Init(ctx context.Context) error {
 	defer s.mu.Unlock()
 	s.closed = false
 	s.events = nil
+	s.catalog = make(map[string]map[string]CatalogTool)
 	return nil
+}
+
+func (s *MemoryStorage) UpsertToolCatalog(ctx context.Context, sessionID, serverName string, tools []CatalogTool) error {
+	_ = ctx
+	_ = sessionID
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.catalog == nil {
+		s.catalog = make(map[string]map[string]CatalogTool)
+	}
+	if s.catalog[serverName] == nil {
+		s.catalog[serverName] = make(map[string]CatalogTool)
+	}
+	for _, tool := range tools {
+		if tool.Name != "" {
+			s.catalog[serverName][tool.Name] = tool
+		}
+	}
+	return nil
+}
+
+func (s *MemoryStorage) ToolCatalog(ctx context.Context, serverName string) ([]CatalogTool, error) {
+	_ = ctx
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]CatalogTool, 0)
+	for _, tool := range s.catalog[serverName] {
+		items = append(items, tool)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	return items, nil
+}
+
+func (s *MemoryStorage) ToolUsage(ctx context.Context, since time.Time, limit int) ([]ToolUsage, error) {
+	_ = ctx
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	counts := map[string]*ToolUsage{}
+	for _, e := range s.events {
+		if !since.IsZero() && e.Timestamp.Before(since) {
+			continue
+		}
+		u := counts[e.ToolName]
+		if u == nil {
+			u = &ToolUsage{ToolName: e.ToolName}
+			counts[e.ToolName] = u
+		}
+		u.Calls++
+		if e.Success {
+			u.Success++
+		} else {
+			u.Failures++
+		}
+		u.Retries += e.RetryCount
+		u.AvgDurationMS += float64(e.DurationMS)
+	}
+	for _, catalog := range s.catalog {
+		for name := range catalog {
+			if counts[name] == nil {
+				counts[name] = &ToolUsage{ToolName: name, ZeroCalls: 1}
+			}
+		}
+	}
+	for _, u := range counts {
+		if u.Calls > 0 {
+			u.ZeroCalls = 0
+		}
+	}
+	out := make([]ToolUsage, 0, len(counts))
+	for _, u := range counts {
+		if u.Calls > 0 {
+			u.AvgDurationMS /= float64(u.Calls)
+		}
+		out = append(out, *u)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Calls == out[j].Calls {
+			return out[i].ToolName < out[j].ToolName
+		}
+		return out[i].Calls > out[j].Calls
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func (s *MemoryStorage) Close() error {

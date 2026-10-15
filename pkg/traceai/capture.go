@@ -10,6 +10,10 @@ import (
 type CallInfo struct {
 	TraceID        string
 	SessionID      string
+	RequestID      string
+	CallID         string
+	ParentEventID  string
+	Attempt        int64
 	AdapterName    string
 	AdapterVersion string
 	AgentName      string
@@ -28,6 +32,13 @@ func (i CallInfo) Start() models.ToolEvent {
 	}
 	if i.SessionID != "" {
 		event.SessionID = i.SessionID
+	}
+	event.RequestID = i.RequestID
+	event.CallID = i.CallID
+	event.ParentEventID = i.ParentEventID
+	event.Attempt = i.Attempt
+	if i.Attempt > 1 {
+		event.RetryCount = i.Attempt - 1
 	}
 	event.AdapterName = i.AdapterName
 	event.AdapterVersion = i.AdapterVersion

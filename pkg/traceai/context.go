@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/MIK-HEAL/TraceAI/pkg/models"
 )
@@ -99,6 +100,18 @@ type ErrorDetails interface {
 	TraceAIError() (errorType, errorCode string)
 }
 
+const (
+	ErrorTransport     = "transport_error"
+	ErrorProtocol      = "protocol_error"
+	ErrorParameter     = "parameter_error"
+	ErrorToolExecution = "tool_execution_error"
+	ErrorProvider      = "provider_error"
+	ErrorTimeout       = "timeout_error"
+)
+
+// ClassifyError exposes the stable error taxonomy used by all SDK adapters.
+func ClassifyError(err error) (errorType, errorCode, message string) { return classifyError(err) }
+
 func classifyError(err error) (string, string, string) {
 	if err == nil {
 		return "", "", ""
@@ -113,23 +126,33 @@ func classifyError(err error) (string, string, string) {
 	}
 	switch {
 	case errors.Is(err, context.Canceled):
-		return "context_error", "context_canceled", message
+		return ErrorTransport, "context_canceled", message
 	case errors.Is(err, context.DeadlineExceeded):
-		return "timeout_error", "deadline_exceeded", message
+		return ErrorTimeout, "deadline_exceeded", message
 	}
 	var statusErr interface{ StatusCode() int }
 	if errors.As(err, &statusErr) {
 		if code := statusErr.StatusCode(); code > 0 {
-			return "http_error", fmt.Sprintf("http_%d", code), message
+			return ErrorTransport, fmt.Sprintf("http_%d", code), message
 		}
 	}
 	var timeoutErr interface{ Timeout() bool }
 	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-		return "timeout_error", "timeout", message
+		return ErrorTimeout, "timeout", message
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return "timeout_error", "timeout", message
+		return ErrorTimeout, "timeout", message
 	}
-	return "adapter_error", "adapter_error", message
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "invalid param"), strings.Contains(lower, "validation"), strings.Contains(lower, "schema"):
+		return ErrorParameter, "invalid_parameters", message
+	case strings.Contains(lower, "jsonrpc"), strings.Contains(lower, "protocol"):
+		return ErrorProtocol, "protocol_error", message
+	case strings.Contains(lower, "provider"), strings.Contains(lower, "rate limit"):
+		return ErrorProvider, "provider_error", message
+	default:
+		return ErrorToolExecution, "execution_error", message
+	}
 }

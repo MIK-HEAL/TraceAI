@@ -292,12 +292,32 @@ func (d *Dashboard) tools(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, err)
 		return
 	}
+	usageSection := ""
+	if store, ok := d.engine.Store.(storage.UsageStorage); ok {
+		if usage, usageErr := store.ToolUsage(ctx, time.Time{}, 20); usageErr == nil {
+			usageSection = section("Usage Analysis", renderUsageTable(usage))
+		}
+	}
 	body := buildPageBody("Tools", "Tool usage and stability view.", []string{"<a href=\"/\">Overview</a>", "<a href=\"/agents\">Agents</a>", "<a href=\"/errors\">Errors</a>"},
 		nil,
 		section("Tool Heatmap", renderToolTable(tools)),
+		usageSection,
 		section("Failure Rank", renderFailureTable(failures)),
 	)
 	renderPage(w, "Tools", body)
+}
+
+func renderUsageTable(rows []storage.ToolUsage) string {
+	if len(rows) == 0 {
+		return `<p class="muted">No usage data yet.</p>`
+	}
+	var b strings.Builder
+	b.WriteString("<table><thead><tr><th>Tool</th><th>Calls</th><th>Success</th><th>Retries</th><th>Avg ms</th></tr></thead><tbody>")
+	for _, r := range rows {
+		b.WriteString("<tr><td>" + html.EscapeString(r.ToolName) + fmt.Sprintf("</td><td>%d</td><td>%d</td><td>%d</td><td>%.1f</td></tr>", r.Calls, r.Success, r.Retries, r.AvgDurationMS))
+	}
+	b.WriteString("</tbody></table>")
+	return b.String()
 }
 
 func (d *Dashboard) agents(w http.ResponseWriter, r *http.Request) {

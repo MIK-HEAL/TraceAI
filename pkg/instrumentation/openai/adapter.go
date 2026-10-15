@@ -1,4 +1,4 @@
-// Package openai observes non-streaming OpenAI function-calling responses.
+// Package openai observes OpenAI function-calling responses, including SSE streams.
 package openai
 
 import (
@@ -99,7 +99,7 @@ func (a *Adapter) ObserveRequest(request *http.Request) (provider.RequestContext
 }
 
 func (a *Adapter) ObserveResponse(request provider.RequestContext, response *http.Response) ([]provider.ToolDecision, error) {
-	if response == nil || request.Streaming || isStreaming(response) || response.StatusCode < 200 || response.StatusCode >= 300 {
+	if response == nil || response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, nil
 	}
 	body, complete, err := provider.ReadResponseBody(response, a.maxBodyBytes)
@@ -109,12 +109,147 @@ func (a *Adapter) ObserveResponse(request provider.RequestContext, response *htt
 	if !complete {
 		return nil, nil
 	}
+	if request.Streaming || isStreaming(response) {
+		if request.APIFamily == "responses" {
+			return parseStreamingResponses(request, response, body)
+		}
+		return parseStreamingChat(request, response, body)
+	}
 	switch request.APIFamily {
 	case "responses":
 		return parseResponses(request, response, body)
 	default:
 		return parseChatCompletions(request, response, body)
 	}
+}
+
+func parseStreamingChat(request provider.RequestContext, response *http.Response, body []byte) ([]provider.ToolDecision, error) {
+	frames, _ := provider.ParseSSEJSON(body)
+	type call struct{ id, name, args string }
+	calls := map[int]*call{}
+	var responseID, model string
+	for _, raw := range frames {
+		var frame struct {
+			ID      string `json:"id"`
+			Model   string `json:"model"`
+			Choices []struct {
+				Delta struct {
+					ToolCalls []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal(raw, &frame) != nil {
+			continue
+		}
+		if frame.ID != "" {
+			responseID = frame.ID
+		}
+		if frame.Model != "" {
+			model = frame.Model
+		}
+		for _, choice := range frame.Choices {
+			for _, part := range choice.Delta.ToolCalls {
+				c := calls[part.Index]
+				if c == nil {
+					c = &call{}
+					calls[part.Index] = c
+				}
+				if part.ID != "" {
+					c.id = part.ID
+				}
+				if part.Function.Name != "" {
+					c.name = part.Function.Name
+				}
+				c.args += part.Function.Arguments
+			}
+		}
+	}
+	request = responseContext(request, response, responseID, model)
+	decisions := make([]provider.ToolDecision, 0, len(calls))
+	for i := 0; i < len(calls); i++ {
+		c := calls[i]
+		if c == nil || c.name == "" {
+			continue
+		}
+		id := c.id
+		if id == "" {
+			id = fallbackCallID(request.RequestID, i)
+		}
+		decisions = append(decisions, provider.NewDecision(request, id, c.name, int64(len(c.args))))
+	}
+	return decisions, nil
+}
+
+func parseStreamingResponses(request provider.RequestContext, response *http.Response, body []byte) ([]provider.ToolDecision, error) {
+	frames, _ := provider.ParseSSEJSON(body)
+	type call struct{ id, name, args string }
+	calls := map[string]*call{}
+	order := []string{}
+	var responseID, model string
+	for _, raw := range frames {
+		var frame struct {
+			Type     string `json:"type"`
+			Response struct {
+				ID    string `json:"id"`
+				Model string `json:"model"`
+			} `json:"response"`
+			Item struct {
+				ID     string `json:"id"`
+				CallID string `json:"call_id"`
+				Name   string `json:"name"`
+			} `json:"item"`
+			ItemID      string `json:"item_id"`
+			Delta       string `json:"delta"`
+			OutputIndex int    `json:"output_index"`
+		}
+		if json.Unmarshal(raw, &frame) != nil {
+			continue
+		}
+		if frame.Response.ID != "" {
+			responseID = frame.Response.ID
+		}
+		if frame.Response.Model != "" {
+			model = frame.Response.Model
+		}
+		id := frame.Item.CallID
+		if id == "" {
+			id = frame.Item.ID
+		}
+		if id == "" {
+			id = frame.ItemID
+		}
+		if id == "" {
+			id = fmt.Sprintf("index-%d", frame.OutputIndex)
+		}
+		if frame.Type == "response.output_item.added" && frame.Item.Name != "" {
+			calls[id] = &call{id: id, name: frame.Item.Name}
+			order = append(order, id)
+		}
+		if frame.Type == "response.function_call_arguments.delta" {
+			if calls[id] == nil {
+				calls[id] = &call{id: id}
+				order = append(order, id)
+			}
+			calls[id].args += frame.Delta
+		}
+	}
+	request = responseContext(request, response, responseID, model)
+	decisions := make([]provider.ToolDecision, 0, len(order))
+	for _, id := range order {
+		c := calls[id]
+		if c.name == "" {
+			continue
+		}
+		decisions = append(decisions, provider.NewDecision(request, id, c.name, int64(len(c.args))))
+	}
+	return decisions, nil
 }
 
 func parseResponses(request provider.RequestContext, response *http.Response, body []byte) ([]provider.ToolDecision, error) {

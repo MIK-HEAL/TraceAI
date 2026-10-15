@@ -5,6 +5,7 @@ const https = require("https");
 const os = require("os");
 const path = require("path");
 const { pipeline } = require("stream/promises");
+const crypto = require("crypto");
 
 const pkg = require("../package.json");
 
@@ -55,6 +56,11 @@ function binaryUrl() {
   return `${releaseBaseUrl()}/v${currentVersion()}/${assetName()}`;
 }
 
+function checksumUrl() {
+  if (process.env.TRACEAI_CHECKSUM_URL) return process.env.TRACEAI_CHECKSUM_URL;
+  return `${releaseBaseUrl()}/v${currentVersion()}/SHA256SUMS`;
+}
+
 function cacheDir() {
   return process.env.TRACEAI_CACHE_DIR || path.join(os.homedir(), ".traceai");
 }
@@ -67,14 +73,31 @@ async function ensureBinary() {
   const target = binaryPath();
   try {
     await fsp.access(target, fs.constants.X_OK);
-    return target;
+    const marker = await fsp.readFile(`${target}.sha256`, "utf8");
+    if ((await sha256File(target)) === marker.trim().toLowerCase()) return target;
+    await fsp.rm(target, { force: true });
   } catch (_) {
     // download below
   }
 
   await fsp.mkdir(path.dirname(target), { recursive: true });
   const tmp = `${target}.download`;
-  await download(binaryUrl(), tmp);
+  const checksumTmp = `${tmp}.sha256`;
+  let expected = "";
+  try {
+    await download(binaryUrl(), tmp);
+    await download(checksumUrl(), checksumTmp);
+    const manifest = await fsp.readFile(checksumTmp, "utf8");
+    expected = checksumForAsset(manifest, assetName());
+    if (!expected) throw new Error(`checksum for ${assetName()} not found in SHA256SUMS`);
+    const actual = await sha256File(tmp);
+    if (actual !== expected) throw new Error(`SHA256 mismatch for ${assetName()}`);
+  } catch (err) {
+    await fsp.rm(tmp, { force: true });
+    await fsp.rm(checksumTmp, { force: true });
+    throw err;
+  }
+  await fsp.rm(checksumTmp, { force: true });
   if (process.platform !== "win32") {
     await fsp.chmod(tmp, 0o755);
   }
@@ -84,7 +107,27 @@ async function ensureBinary() {
     await fsp.rm(target, { force: true });
     await fsp.rename(tmp, target);
   }
+  await fsp.writeFile(`${target}.sha256`, expected, "utf8");
   return target;
+}
+
+function checksumForAsset(manifest, name) {
+  for (const line of manifest.split(/\r?\n/)) {
+    const match = line.trim().match(/^([a-fA-F0-9]{64})\s+\*?(.+)$/);
+    if (match && path.basename(match[2].trim()) === name) return match[1].toLowerCase();
+  }
+  return "";
+}
+
+async function sha256File(file) {
+  const hash = crypto.createHash("sha256");
+  await new Promise((resolve, reject) => {
+    const stream = fs.createReadStream(file);
+    stream.on("data", chunk => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", resolve);
+  });
+  return hash.digest("hex");
 }
 
 async function download(url, destination) {
@@ -133,6 +176,8 @@ module.exports = {
   binaryName,
   binaryPath,
   binaryUrl,
+  checksumUrl,
+  checksumForAsset,
   currentVersion,
   ensureBinary,
   runTraceAI,

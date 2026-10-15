@@ -26,6 +26,18 @@ func (c *Collector) Publish(event events.ToolEvent) error {
 	return c.Bus.Publish(event)
 }
 
+// RecordToolCatalog persists discovery independently from execution events so
+// zero-call tools remain visible to analytics without inflating call counts.
+func (c *Collector) RecordToolCatalog(ctx context.Context, sessionID, serverName string, tools []storage.CatalogTool) error {
+	if c == nil || c.Bus == nil {
+		return nil
+	}
+	if store, ok := c.Bus.Storage().(storage.CatalogStorage); ok {
+		return store.UpsertToolCatalog(ctx, sessionID, serverName, tools)
+	}
+	return nil
+}
+
 func (c *Collector) Close(timeout time.Duration) error {
 	return c.Bus.CloseWithTimeout(timeout)
 }

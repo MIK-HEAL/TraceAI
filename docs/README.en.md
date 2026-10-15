@@ -47,8 +47,8 @@ This data helps developers understand:
 | CLI analytics and export | Available | Rankings, trends, errors, call sequences, retries, CSV, and JSON |
 | Local web dashboard | Available | Tool, agent, and error analysis |
 | Native OpenAI function calling | In development | Links provider decisions with actual tool execution |
-| Anthropic tool use | In development | Initially targets non-streaming Messages calls |
-| OpenAI / Anthropic streaming capture | Planned | Requires tool-call-aware aggregation of streamed argument fragments |
+| Anthropic tool use | Available | Messages tool-use capture with executor correlation |
+| OpenAI / Anthropic streaming capture | Available | Aggregates streamed argument fragments by tool-call ID |
 | npm CLI release | Available | `@clonap4d/traceai` downloads the matching GitHub Release binary |
 | Python registry release | In preparation | The Python wrapper is in `distribution/python/`; PyPI publication is pending |
 
@@ -249,7 +249,7 @@ This makes it possible to analyze:
 - Whether execution fails during dispatch, argument parsing, timeout, or business logic.
 - The difference between model selection rate and real execution success rate.
 
-The first implementation targets non-streaming OpenAI and Anthropic provider adapters. Streaming aggregation and cross-language proxy capture will follow later.
+OpenAI and Anthropic adapters aggregate both regular and streaming tool calls by stable tool-call ID.
 
 ## Analytics Commands
 

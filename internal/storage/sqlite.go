@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,16 +17,42 @@ import (
 )
 
 type SQLiteStorage struct {
-	mu   sync.RWMutex
-	path string
-	db   *sql.DB
+	mu      sync.RWMutex
+	path    string
+	db      *sql.DB
+	options SQLiteOptions
+}
+
+type CaptureMode string
+
+const (
+	MetadataOnly CaptureMode = "metadata-only"
+	Redacted     CaptureMode = "redacted"
+	FullPayload  CaptureMode = "full-payload"
+)
+
+type SQLiteOptions struct {
+	RetentionDays int
+	MaxBytes      int64
+	CaptureMode   CaptureMode
+	RedactKeys    []string
 }
 
 func NewSQLiteStorage(path string) *SQLiteStorage {
 	if path == "" {
 		path = "traceai.db"
 	}
-	return &SQLiteStorage{path: path}
+	return &SQLiteStorage{path: path, options: SQLiteOptions{CaptureMode: Redacted}}
+}
+
+func NewSQLiteStorageWithOptions(path string, options SQLiteOptions) *SQLiteStorage {
+	if path == "" {
+		path = "traceai.db"
+	}
+	if options.CaptureMode == "" {
+		options.CaptureMode = Redacted
+	}
+	return &SQLiteStorage{path: path, options: options}
 }
 
 func (s *SQLiteStorage) Init(ctx context.Context) error {
@@ -95,13 +123,77 @@ func (s *SQLiteStorage) Ping(ctx context.Context) error {
 	return db.PingContext(ctx)
 }
 
+func (s *SQLiteStorage) UpsertToolCatalog(ctx context.Context, sessionID, serverName string, tools []CatalogTool) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.db == nil {
+		return fmt.Errorf("storage not initialized")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, tool := range tools {
+		if strings.TrimSpace(tool.Name) == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO mcp_tool_catalog (server_name, tool_name, description, first_seen, last_seen, session_id) VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?) ON CONFLICT(server_name, tool_name) DO UPDATE SET description=excluded.description, last_seen=excluded.last_seen, session_id=excluded.session_id`, serverName, tool.Name, tool.Description, sessionID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *SQLiteStorage) ToolCatalog(ctx context.Context, serverName string) ([]CatalogTool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.db == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT tool_name, description FROM mcp_tool_catalog WHERE server_name = ? ORDER BY tool_name`, serverName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CatalogTool
+	for rows.Next() {
+		var item CatalogTool
+		if err := rows.Scan(&item.Name, &item.Description); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStorage) ToolUsage(ctx context.Context, since time.Time, limit int) ([]ToolUsage, error) {
+	tmp := &MemoryStorage{}
+	if err := s.copyInto(ctx, tmp, since); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	rows, err := s.db.QueryContext(ctx, `SELECT server_name, tool_name, description FROM mcp_tool_catalog`)
+	s.mu.RUnlock()
+	if err == nil {
+		for rows.Next() {
+			var server, name, description string
+			if scanErr := rows.Scan(&server, &name, &description); scanErr == nil {
+				_ = tmp.UpsertToolCatalog(ctx, "", server, []CatalogTool{{Name: name, Description: description}})
+			}
+		}
+		_ = rows.Close()
+	}
+	return tmp.ToolUsage(ctx, since, limit)
+}
+
 func (s *SQLiteStorage) InsertEvent(ctx context.Context, event events.ToolEvent) error {
 	event = event.Normalize()
 	if err := event.Validate(); err != nil {
 		slog.Default().With("component", "storage", "backend", "sqlite").Error("insert event failed", "event_id", event.EventID, "error", err)
 		return err
 	}
-	metadata, err := marshalMetadata(sanitizeMetadata(event.Metadata))
+	metadata, err := marshalMetadata(sanitizeMetadataWithOptions(event.Metadata, s.options))
 	if err != nil {
 		return fmt.Errorf("marshal event metadata: %w", err)
 	}
@@ -122,12 +214,12 @@ func (s *SQLiteStorage) InsertEvent(ctx context.Context, event events.ToolEvent)
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO events (
-			event_id, schema_version, trace_id, session_id, timestamp,
+			event_id, schema_version, trace_id, session_id, request_id, call_id, parent_event_id, attempt, timestamp,
 			agent_name, agent_version, adapter_name, adapter_version,
 			tool_type, tool_name, function_name, success, duration_ms,
 			input_size, output_size, retry_count, error_type, error_code, error_message, metadata
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, event.EventID, event.SchemaVersion, event.TraceID, event.SessionID, event.Timestamp.UTC().Format(time.RFC3339Nano),
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, event.EventID, event.SchemaVersion, event.TraceID, event.SessionID, event.RequestID, event.CallID, event.ParentEventID, event.Attempt, event.Timestamp.UTC().Format(time.RFC3339Nano),
 		event.AgentName, event.AgentVersion, event.AdapterName, event.AdapterVersion,
 		event.ToolType, event.ToolName, event.FunctionName, boolToInt(event.Success), event.DurationMS,
 		event.InputSize, event.OutputSize, event.RetryCount, event.ErrorType, event.ErrorCode, event.ErrorMessage, metadata); err != nil {
@@ -214,7 +306,7 @@ func (s *SQLiteStorage) listEvents(ctx context.Context, since time.Time, limit i
 		args = append(args, limit)
 	}
 	query := fmt.Sprintf(`
-		SELECT event_id, schema_version, trace_id, session_id, timestamp,
+		SELECT event_id, schema_version, trace_id, session_id, request_id, call_id, parent_event_id, attempt, timestamp,
 			agent_name, agent_version, adapter_name, adapter_version,
 			tool_type, tool_name, function_name, success, duration_ms,
 			input_size, output_size, retry_count, error_type, error_code, error_message, metadata
@@ -236,7 +328,7 @@ func (s *SQLiteStorage) listEvents(ctx context.Context, since time.Time, limit i
 		var metadata string
 		var success int
 		if err := rows.Scan(
-			&event.EventID, &event.SchemaVersion, &event.TraceID, &event.SessionID, &timestamp,
+			&event.EventID, &event.SchemaVersion, &event.TraceID, &event.SessionID, &event.RequestID, &event.CallID, &event.ParentEventID, &event.Attempt, &timestamp,
 			&event.AgentName, &event.AgentVersion, &event.AdapterName, &event.AdapterVersion,
 			&event.ToolType, &event.ToolName, &event.FunctionName, &success, &event.DurationMS,
 			&event.InputSize, &event.OutputSize, &event.RetryCount, &event.ErrorType, &event.ErrorCode, &event.ErrorMessage, &metadata,
@@ -552,6 +644,10 @@ func (s *SQLiteStorage) migrate(ctx context.Context, db *sql.DB) error {
 			schema_version TEXT NOT NULL,
 			trace_id TEXT NOT NULL,
 			session_id TEXT NOT NULL,
+			request_id TEXT NOT NULL DEFAULT '',
+			call_id TEXT NOT NULL DEFAULT '',
+			parent_event_id TEXT NOT NULL DEFAULT '',
+			attempt INTEGER NOT NULL DEFAULT 0,
 			timestamp TEXT NOT NULL,
 			agent_name TEXT NOT NULL,
 			agent_version TEXT NOT NULL,
@@ -606,6 +702,15 @@ func (s *SQLiteStorage) migrate(ctx context.Context, db *sql.DB) error {
 			input_size INTEGER NOT NULL,
 			output_size INTEGER NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS mcp_tool_catalog (
+			server_name TEXT NOT NULL,
+			tool_name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			first_seen TEXT NOT NULL,
+			last_seen TEXT NOT NULL,
+			session_id TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (server_name, tool_name)
+		);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_session_timestamp ON events(session_id, timestamp);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_tool_name ON events(tool_name);`,
@@ -613,6 +718,18 @@ func (s *SQLiteStorage) migrate(ctx context.Context, db *sql.DB) error {
 	}
 	for _, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	// Add columns to databases created by schema v1. SQLite has no portable
+	// IF NOT EXISTS form for ADD COLUMN, so duplicate-column errors are safe.
+	for _, stmt := range []string{
+		`ALTER TABLE events ADD COLUMN request_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE events ADD COLUMN call_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE events ADD COLUMN parent_event_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE events ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
 			return err
 		}
 	}
@@ -760,6 +877,105 @@ func sanitizeMetadata(v map[string]interface{}) map[string]interface{} {
 		}
 	}
 	return out
+}
+
+func sanitizeMetadataWithOptions(v map[string]interface{}, options SQLiteOptions) map[string]interface{} {
+	base := sanitizeMetadata(v)
+	if options.CaptureMode == FullPayload {
+		return base
+	}
+	keys := map[string]bool{"prompt": true, "messages": true, "arguments": true, "input": true, "output": true, "result": true, "content": true, "body": true, "authorization": true, "token": true, "api_key": true, "apikey": true, "secret": true}
+	for _, key := range options.RedactKeys {
+		keys[strings.ToLower(strings.TrimSpace(key))] = true
+	}
+	if options.CaptureMode == MetadataOnly {
+		out := make(map[string]interface{}, len(base))
+		for k, v := range base {
+			lk := strings.ToLower(k)
+			if keys[lk] {
+				continue
+			}
+			out[k] = v
+		}
+		return out
+	}
+	return redactValue(base, keys).(map[string]interface{})
+}
+
+func redactValue(value interface{}, keys map[string]bool) interface{} {
+	switch x := value.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(x))
+		for k, v := range x {
+			if keys[strings.ToLower(k)] {
+				out[k] = "[REDACTED]"
+			} else {
+				out[k] = redactValue(v, keys)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(x))
+		for i, v := range x {
+			out[i] = redactValue(v, keys)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+// Prune deletes expired raw events and rebuilds derived aggregates. It is
+// safe to run while readers are active and is intentionally explicit so
+// operators can schedule it as part of their retention policy.
+func (s *SQLiteStorage) Prune(ctx context.Context) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.db == nil {
+		return fmt.Errorf("storage not initialized")
+	}
+	if s.options.RetentionDays <= 0 && s.options.MaxBytes <= 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if s.options.RetentionDays > 0 {
+		cutoff := time.Now().UTC().AddDate(0, 0, -s.options.RetentionDays).Format(time.RFC3339Nano)
+		if _, err := tx.ExecContext(ctx, `DELETE FROM events WHERE timestamp < ?`, cutoff); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE session_id NOT IN (SELECT DISTINCT session_id FROM events)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tools WHERE tool_name NOT IN (SELECT DISTINCT tool_name FROM events)`); err != nil {
+		return err
+	}
+	// Rebuild derived tables so retention never leaves stale success rates or
+	// latency totals behind.
+	for _, stmt := range []string{
+		`DELETE FROM sessions`, `DELETE FROM agents`, `DELETE FROM tools`, `DELETE FROM daily_stats`,
+		`INSERT INTO sessions (session_id, agent_name, adapter_name, first_seen, last_seen, call_count) SELECT session_id, MAX(agent_name), MAX(adapter_name), MIN(timestamp), MAX(timestamp), COUNT(*) FROM events GROUP BY session_id`,
+		`INSERT INTO agents (agent_name, agent_version, call_count, success_count, total_duration_ms, input_size, output_size, last_seen) SELECT agent_name, MAX(agent_version), COUNT(*), COALESCE(SUM(success),0), COALESCE(SUM(duration_ms),0), COALESCE(SUM(input_size),0), COALESCE(SUM(output_size),0), MAX(timestamp) FROM events GROUP BY agent_name`,
+		`INSERT INTO tools (tool_name, tool_type, call_count, success_count, total_duration_ms, input_size, output_size, last_seen) SELECT tool_name, MAX(tool_type), COUNT(*), COALESCE(SUM(success),0), COALESCE(SUM(duration_ms),0), COALESCE(SUM(input_size),0), COALESCE(SUM(output_size),0), MAX(timestamp) FROM events GROUP BY tool_name`,
+		`INSERT INTO daily_stats (stat_day, call_count, success_count, total_duration_ms, input_size, output_size) SELECT substr(timestamp,1,10), COUNT(*), COALESCE(SUM(success),0), COALESCE(SUM(duration_ms),0), COALESCE(SUM(input_size),0), COALESCE(SUM(output_size),0) FROM events GROUP BY substr(timestamp,1,10)`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if s.options.MaxBytes > 0 {
+		if info, err := os.Stat(s.path); err == nil && info.Size() > s.options.MaxBytes {
+			return fmt.Errorf("database size %d exceeds limit %d after retention", info.Size(), s.options.MaxBytes)
+		}
+	}
+	return nil
 }
 
 func unmarshalMetadata(v string) (map[string]interface{}, error) {

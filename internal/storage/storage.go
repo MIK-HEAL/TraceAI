@@ -31,6 +31,28 @@ type Storage interface {
 	RetryPatterns(ctx context.Context, since time.Time, limit int) ([]RetryPattern, error)
 }
 
+// CatalogStorage is implemented by stores that persist the MCP capability
+// catalog separately from call events. Keeping it optional preserves the
+// Storage interface for lightweight and third-party implementations.
+type CatalogStorage interface {
+	UpsertToolCatalog(ctx context.Context, sessionID, serverName string, tools []CatalogTool) error
+	ToolCatalog(ctx context.Context, serverName string) ([]CatalogTool, error)
+}
+
+type CatalogTool struct {
+	Name        string
+	Description string
+}
+
+type UsageStorage interface {
+	ToolUsage(ctx context.Context, since time.Time, limit int) ([]ToolUsage, error)
+}
+type ToolUsage struct {
+	ToolName                                     string
+	Calls, Success, Failures, Retries, ZeroCalls int64
+	AvgDurationMS                                float64
+}
+
 type ToolCount struct {
 	ToolName string
 	Calls    int64
@@ -113,12 +135,12 @@ type CallSequence struct {
 
 // RetryPattern describes how a tool behaves across retries within a session.
 type RetryPattern struct {
-	ToolName    string
-	TotalCalls  int64
-	Sessions    int64  // number of sessions where this tool appears
-	NeverFails  int64  // all calls succeed
-	AlwaysFails int64  // all calls fail
-	Recovers    int64  // fails then succeeds (recovery)
-	Degrades    int64  // succeeds then fails (degradation)
+	ToolName     string
+	TotalCalls   int64
+	Sessions     int64 // number of sessions where this tool appears
+	NeverFails   int64 // all calls succeed
+	AlwaysFails  int64 // all calls fail
+	Recovers     int64 // fails then succeeds (recovery)
+	Degrades     int64 // succeeds then fails (degradation)
 	Intermittent int64 // mixed pattern with multiple transitions
 }

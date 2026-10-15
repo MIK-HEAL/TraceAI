@@ -63,15 +63,18 @@ func callInfo(decision provider.ToolDecision) traceai.CallInfo {
 		metadata = decision.ExecutionMetadata()
 	}
 	return traceai.CallInfo{
-		TraceID:      decision.TraceID,
-		SessionID:    decision.SessionID,
-		AdapterName:  adapterName,
-		AgentName:    decision.AgentName,
-		AgentVersion: decision.AgentVersion,
-		ToolType:     "function",
-		ToolName:     toolName,
-		FunctionName: functionName,
-		Metadata:     metadata,
+		TraceID:       decision.TraceID,
+		SessionID:     decision.SessionID,
+		RequestID:     decision.RequestID,
+		CallID:        decision.ToolCallID,
+		ParentEventID: decision.EventID,
+		AdapterName:   adapterName,
+		AgentName:     decision.AgentName,
+		AgentVersion:  decision.AgentVersion,
+		ToolType:      "function",
+		ToolName:      toolName,
+		FunctionName:  functionName,
+		Metadata:      metadata,
 	}
 }
 

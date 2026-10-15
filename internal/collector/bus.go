@@ -149,6 +149,15 @@ func (b *Bus) Input() <-chan events.ToolEvent {
 	return b.input
 }
 
+// Storage exposes the configured persistence backend to optional features
+// such as catalog discovery while keeping the core bus API unchanged.
+func (b *Bus) Storage() storage.Storage {
+	if b == nil {
+		return nil
+	}
+	return b.storage
+}
+
 func (b *Bus) IsClosed() bool {
 	b.publishMu.Lock()
 	defer b.publishMu.Unlock()
