@@ -1,0 +1,218 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to package and publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION_FILE: go.mod
+
+jobs:
+  validate:
+    name: Validate source and release metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+      - name: Check tag matches the distribution manifest
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="$(python -c 'import json; print(json.load(open("distribution/version.json"))["version"])')"
+          manifest_tag="$(python -c 'import json; print(json.load(open("distribution/version.json"))["release_tag"])')"
+          test "$RELEASE_TAG" = "$manifest_tag"
+          test "$RELEASE_TAG" = "v$version"
+      - name: Run tests
+        run: go test ./...
+
+  build:
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            goos: linux
+            arch: amd64
+          - platform: linux
+            goos: linux
+            arch: arm64
+          - platform: darwin
+            goos: darwin
+            arch: amd64
+          - platform: darwin
+            goos: darwin
+            arch: arm64
+          - platform: windows
+            goos: windows
+            arch: amd64
+          - platform: windows
+            goos: windows
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+      - name: Build release binary
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.arch }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          commit="$(git rev-parse HEAD)"
+          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ext=""
+          if [ "$GOOS" = windows ]; then ext=".exe"; fi
+          mkdir -p out
+          CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-X main.version=$version -X main.buildCommit=$commit -X main.buildDate=$build_date" \
+            -o "out/traceai-${{ matrix.platform }}-${{ matrix.arch }}${ext}" ./cmd/traceai
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: traceai-${{ matrix.platform }}-${{ matrix.arch }}
+          path: out/traceai-*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: traceai-*
+          path: release-assets
+          merge-multiple: true
+      - name: Package npm wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          npm pack ./distribution/npm --pack-destination release-assets
+      - name: Generate checksums and release manifest
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          (cd release-assets && find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name release-manifest.json -printf '%f\n' | sort | xargs sha256sum > SHA256SUMS)
+          python - "$RELEASE_TAG" <<'PY'
+          import hashlib, json, pathlib, sys
+          tag = sys.argv[1]
+          root = pathlib.Path("release-assets")
+          assets = []
+          for path in sorted(root.iterdir()):
+              if path.is_file() and path.name != "release-manifest.json":
+                  assets.append({"name": path.name, "size": path.stat().st_size,
+                                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+          (root / "release-manifest.json").write_text(json.dumps({"release_tag": tag, "assets": assets}, indent=2) + "\n")
+          PY
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          notes="release/${RELEASE_TAG}.md"
+          if [ ! -f "$notes" ]; then notes="release/v${version}.md"; fi
+          gh release create "$RELEASE_TAG" release-assets/* --title "TraceAI $version" --notes-file "$notes" --verify-tag || \
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+
+  publish-npm:
+    name: Publish npm wrapper
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - name: Publish when this version is not already registered
+        if: env.NPM_TOKEN != ''
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./distribution/npm/package.json').version")"
+          if npm view "@clonap4d/traceai@$version" version >/dev/null 2>&1; then
+            echo "@clonap4d/traceai@$version already exists; skipping publish"
+          else
+            npm publish ./distribution/npm --access public --tag latest
+          fi
+      - name: Explain skipped npm publish
+        if: env.NPM_TOKEN == ''
+        run: echo 'NPM_TOKEN is not configured; GitHub release assets were published.'
+
+  verify-install:
+    name: Verify npm install on ${{ matrix.name }}
+    needs: release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            runner: ubuntu-latest
+          - name: macOS
+            runner: macos-latest
+          - name: Windows
+            runner: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install wrapper from a clean npm prefix
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          TRACEAI_RELEASE_BASE_URL: https://github.com/MIK-HEAL/TraceAI/releases/download/${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          TRACEAI_CACHE_DIR: ${{ runner.temp }}/traceai-cache
+        run: |
+          set -euo pipefail
+          package_path="$(npm pack ./distribution/npm --pack-destination "$RUNNER_TEMP" | tail -n 1)"
+          npm install --global "$RUNNER_TEMP/$package_path"
+          traceai version
+          traceai --store memory health
+          traceai --store memory metrics --format json

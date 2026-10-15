@@ -1,0 +1,22 @@
+{
+  "name": "@clonap4d/traceai",
+  "version": "0.1.0-beta.1",
+  "description": "TraceAI CLI distribution wrapper",
+  "license": "MIT",
+  "bin": {
+    "traceai": "bin/traceai.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "scripts",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

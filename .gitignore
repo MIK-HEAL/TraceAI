@@ -15,3 +15,21 @@ traceai.db
 
 distribution/
 scripts/
+
+# Keep release source and automation in version control. Generated artifacts
+# remain ignored by the nested patterns below.
+!distribution/
+distribution/*
+!distribution/version.json
+!distribution/version_test.go
+!distribution/doc.go
+!distribution/npm/
+!distribution/npm/**
+!distribution/python/
+!distribution/python/**
+distribution/python/**/__pycache__/
+
+!scripts/
+scripts/*
+!scripts/release.ps1
+!scripts/sync-distribution-version.ps1

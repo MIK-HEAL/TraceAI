@@ -1,0 +1,11 @@
+{
+  "version": "0.1.0-beta.1",
+  "release_tag": "v0.1.0-beta.1",
+  "go_module": "github.com/MIK-HEAL/TraceAI",
+  "binary_name": "traceai",
+  "binary_base_url": "https://github.com/MIK-HEAL/TraceAI/releases/download",
+  "npm_package": "@clonap4d/traceai",
+  "python_package": "traceai",
+  "supported_platforms": ["linux", "darwin", "windows"],
+  "supported_architectures": ["amd64", "arm64"]
+}

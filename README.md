@@ -49,7 +49,8 @@ GitHub MCP
 | OpenAI 原生 Function Calling | 可用 | Responses / Chat Completions 非流式 Provider Capture + 真实执行关联 |
 | Anthropic Tool Use | 可用 | Messages 非流式 Provider Capture + 真实执行关联 |
 | OpenAI / Anthropic 流式采集 | 规划中 | 需要按 tool call ID 聚合流式参数片段 |
-| npm / Python 注册表发布 | 准备中 | 保留 Go 核心，包管理器负责分发 CLI |
+| npm CLI 发布 | 可用 | `@clonap4d/traceai` 安装 wrapper，并按平台下载 GitHub Release 二进制 |
+| Python 注册表发布 | 准备中 | Python wrapper 已在 `distribution/python/`，PyPI 发布仍待完成 |
 
 ## 工作方式
 
@@ -77,6 +78,15 @@ TraceAI 有三种运行形态：
 ## 快速开始
 
 ### 1. 安装
+
+直接使用 npm（Node.js 18 或更高版本）：
+
+```bash
+npm install --global @clonap4d/traceai
+traceai version
+```
+
+npm wrapper 会从与 npm 版本匹配的 GitHub Release 下载当前平台的二进制。若网络受限，可以改用下面的 Go 安装或源码构建方式。
 
 需要 Go 1.25 或更高版本。
 
@@ -318,7 +328,7 @@ TraceAI 当前处于开发预览阶段，适合：
 
 当前不建议直接将它作为关键生产系统的唯一遥测链路。正式生产化仍需要继续验证跨平台发布、长期运行、容量边界、升级迁移和原生 Function Calling 的完整覆盖。
 
-npm 和 Python 分发包装器已经放在 `distribution/`，但在注册表发布完成前，推荐使用 Go 安装或从源码构建。
+npm wrapper 已发布为 `@clonap4d/traceai`，每个版本的 GitHub Release 同时包含 Linux、macOS 和 Windows 的 amd64/arm64 二进制及 `SHA256SUMS`。Python wrapper 已放在 `distribution/python/`，PyPI 发布仍在准备中。
 
 ## 开发与验证
 

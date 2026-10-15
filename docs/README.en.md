@@ -49,7 +49,8 @@ This data helps developers understand:
 | Native OpenAI function calling | In development | Links provider decisions with actual tool execution |
 | Anthropic tool use | In development | Initially targets non-streaming Messages calls |
 | OpenAI / Anthropic streaming capture | Planned | Requires tool-call-aware aggregation of streamed argument fragments |
-| npm / Python registry releases | In preparation | Go remains the core; package managers distribute the CLI |
+| npm CLI release | Available | `@clonap4d/traceai` downloads the matching GitHub Release binary |
+| Python registry release | In preparation | The Python wrapper is in `distribution/python/`; PyPI publication is pending |
 
 ## How It Works
 
@@ -77,6 +78,15 @@ A single `traceai` executable is expected. It contains both one-shot analytics c
 ## Quick Start
 
 ### 1. Install
+
+Install the npm wrapper (Node.js 18 or later):
+
+```bash
+npm install --global @clonap4d/traceai
+traceai version
+```
+
+The wrapper downloads the platform binary from the GitHub Release matching its npm version. If the network is restricted, use the Go or source installation below.
 
 Go 1.25 or later is required.
 
@@ -318,7 +328,7 @@ TraceAI is currently a development preview suitable for:
 
 It is not yet recommended as the only telemetry path for a critical production system. Production readiness still requires more cross-platform release validation, long-running capacity testing, upgrade migration work, and complete native function-calling coverage.
 
-npm and Python distribution wrappers are present under `distribution/`. Until registry publication is complete, Go installation or a source build is recommended.
+npm is published as `@clonap4d/traceai`; each GitHub Release contains Linux, macOS, and Windows amd64/arm64 binaries plus `SHA256SUMS`. The Python wrapper is present under `distribution/python/`, while PyPI publication remains pending.
 
 ## Development
 

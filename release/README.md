@@ -4,6 +4,15 @@
 
 ## 快速安装
 
+npm（Node.js 18+）：
+
+```bash
+npm install --global @clonap4d/traceai
+traceai version
+```
+
+Go：
+
 ```bash
 go install github.com/MIK-HEAL/TraceAI/cmd/traceai@latest
 ```
