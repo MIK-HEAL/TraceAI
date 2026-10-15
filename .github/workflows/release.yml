@@ -207,7 +207,7 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          TRACEAI_RELEASE_BASE_URL: https://github.com/MIK-HEAL/TraceAI/releases/download/${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          TRACEAI_RELEASE_BASE_URL: https://github.com/MIK-HEAL/TraceAI/releases/download
           TRACEAI_CACHE_DIR: ${{ runner.temp }}/traceai-cache
         run: |
           set -euo pipefail
